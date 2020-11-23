@@ -4,26 +4,25 @@ from torch.distributions import MultivariateNormal, MixtureSameFamily
 
 
 class GaussianMixtureModel(MixtureSameFamily):
-    def __init__(self, mix, loc, log_diag, tril):
-        bs_ts_fs = list(loc.shape[:-1])
-        z = torch.zeros(bs_ts_fs, device=loc.device)
-        diag = torch.exp(log_diag)
-        #if it < 100:
-        #mask = (torch.rand_like(diag[..., [0]]) < 0.5).type_as(diag)
-        #diag = mask * diag + (1. - mask) * torch.ones_like(diag) * 0.04
-        #diag = torch.ones_like(diag) * 0.04
-        #tril = torch.zeros_like(tril)
-        self.L = torch.stack([
-            diag[..., 0], z, z,
-            tril[..., 0], diag[..., 1], z,
-            tril[..., 1], tril[..., 2], diag[..., 2]
-        ], dim=-1).view(bs_ts_fs + [3, 3])
+    def __init__(self, mix, loc, scale_tril):
+        self.mix = mix
         self.loc = loc
-        super().__init__(mix, MultivariateNormal(loc=loc, scale_tril=self.L))
+        self.scale_tril = scale_tril
+        super().__init__(mix, MultivariateNormal(loc=loc, scale_tril=scale_tril))
+
+    @classmethod
+    def from_vector_params(cls, mix, loc, log_diag, scale_tril_v):
+        diag = torch.exp(log_diag)
+        diag_m = torch.diag_embed(diag)
+        tril_m = torch.zeros_like(diag_m)
+        tril_indices = torch.tril_indices(row=3, col=3, offset=-1)
+        tril_m[..., tril_indices[0], tril_indices[1]] = scale_tril_v
+        scale_tril = diag_m + tril_m
+        return cls(mix, loc, scale_tril)
 
     def __getitem__(self, item):
         new_mix = torch.distributions.Categorical(logits=self.mixture_distribution.logits[item])
-        return MixtureSameFamily(new_mix, MultivariateNormal(self.loc[item], scale_tril=self.L))
+        return MixtureSameFamily(new_mix, MultivariateNormal(self.loc[item], scale_tril=self.L[item]))
 
     @property
     def mode(self):

@@ -1,2 +1,2 @@
 from .motion import Motion
-from .skeleton import Skeleton
+from .node_representation import SingleNodeRepresentation, Skeleton

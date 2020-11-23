@@ -11,14 +11,14 @@ from motion.dynamics import Linear
 
 
 class Motion(Module):
-    def __init__(self, skeleton, state_representation, **kwargs):
+    def __init__(self, node_representation, state_representation, **kwargs):
         super(Motion, self).__init__()
 
-        self.skeleton = skeleton
+        self.node_representation = node_representation
 
         # Core Model
-        self.core = MGS2S(input_size=skeleton.num_joints() * state_representation.size(),
-                          feature_size=skeleton.num_joints(),
+        self.core = MGS2S(input_size=node_representation.num_nodes() * state_representation.size(),
+                          feature_size=node_representation.num_nodes(),
                           state_representation=state_representation,
                           **kwargs
                           )
@@ -29,7 +29,7 @@ class Motion(Module):
         # Dynamics
         self.dynamics = Linear(**kwargs)
 
-        self.to_gmm_params = ToGMMParameter(input_size=kwargs['output_size'] // skeleton.num_joints(),
+        self.to_gmm_params = ToGMMParameter(input_size=kwargs['output_size'] // node_representation.num_nodes(),
                                             output_state_size=state_representation.size(),
                                             **kwargs)
 
@@ -53,7 +53,7 @@ class Motion(Module):
         y = y.view(bs, y.shape[1], y.shape[-2], fn, -1).permute(0, 1, 3, 2, 4)
         loc, log_dig, tril = self.to_gmm_params(y)
         loc = x[:, [-1]].unsqueeze(-2) + torch.cumsum(loc, dim=1)
-        dist = GaussianMixtureModel(z, loc, log_dig, tril)
+        dist = GaussianMixtureModel.from_vector_params(z, loc, log_dig, tril)
 
         if self.training:
             return dist, {'z': z, **kwargs}

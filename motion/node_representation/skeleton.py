@@ -17,5 +17,5 @@ class Skeleton:
         assert len(self.parents.shape) == 1
         assert self.offsets.shape[0] == self.parents.shape[0]
 
-    def num_joints(self):
+    def num_nodes(self):
         return len(self.parents)
