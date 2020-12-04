@@ -12,17 +12,22 @@ class GaussianMixtureModel(MixtureSameFamily):
 
     @classmethod
     def from_vector_params(cls, mix, loc, log_diag, scale_tril_v):
-        diag = torch.exp(log_diag)
+        diag = torch.exp(log_diag.clamp(-10))  # gradient of exp becomes nan for very small values
         diag_m = torch.diag_embed(diag)
         tril_m = torch.zeros_like(diag_m)
-        tril_indices = torch.tril_indices(row=3, col=3, offset=-1)
+        tril_indices = torch.tril_indices(row=diag.shape[-1], col=diag.shape[-1], offset=-1)
         tril_m[..., tril_indices[0], tril_indices[1]] = scale_tril_v
         scale_tril = diag_m + tril_m
         return cls(mix, loc, scale_tril)
 
+    @classmethod
+    def zero_variance(cls, mix, loc):
+        scale_tril = torch.zeros_like(torch.diag_embed(loc))
+        return cls(mix, loc, scale_tril)
+
     def __getitem__(self, item):
         new_mix = torch.distributions.Categorical(logits=self.mixture_distribution.logits[item])
-        return MixtureSameFamily(new_mix, MultivariateNormal(self.loc[item], scale_tril=self.L[item]))
+        return MixtureSameFamily(new_mix, MultivariateNormal(self.loc[item], scale_tril=self.scale_tril[item]))
 
     @property
     def mode(self):

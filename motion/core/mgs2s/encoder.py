@@ -14,6 +14,7 @@ class Encoder(nn.Module):
         super().__init__()
         self.activation_fn = get_activation_function(enc_activation_fn)
         self.rnn = nn.GRU(input_size=input_size, hidden_size=output_size, num_layers=enc_num_layers, batch_first=True)
+        self.fc = nn.Linear(output_size, output_size)
         self.h0 = nn.Parameter(torch.zeros(enc_num_layers, 1, output_size).normal_(std=0.01), requires_grad=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -21,4 +22,4 @@ class Encoder(nn.Module):
         # Initialize hidden state of rnn
         rnn_h = self.h0.expand(-1, bs, -1).contiguous()
         y, _ = self.rnn(x, rnn_h)
-        return self.activation_fn(y[:, -1])
+        return torch.nn.functional.leaky_relu(self.fc(y[:, -1]))

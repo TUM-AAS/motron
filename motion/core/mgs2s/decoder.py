@@ -4,6 +4,44 @@ import torch.nn as nn
 from common.torch import get_activation_function
 
 # TODO: Idea: Can you use the inverse of the toGMM to populate the first input to the GRU e.g. control->state
+from motion.components.to_bingham_param import ToBMMParameter
+from motion.components.to_gmm_param import ToGMMParameter
+
+def quat_act2(x):
+    x = torch.tanh(x)
+    return (13./5.)*(torch.pow(0.6*x, 3) - 0.6*x)
+
+class QuatAct(torch.autograd.Function):
+    """
+    We can implement our own custom autograd Functions by subclassing
+    torch.autograd.Function and implementing the forward and backward passes
+    which operate on Tensors.
+    """
+
+    @staticmethod
+    def forward(ctx, input):
+        """
+        In the forward pass we receive a Tensor containing the input and return
+        a Tensor containing the output. ctx is a context object that can be used
+        to stash information for backward computation. You can cache arbitrary
+        objects for use in the backward pass using the ctx.save_for_backward method.
+        """
+        ctx.save_for_backward(input)
+        return input.clamp(min=-1, max=1)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        """
+        In the backward pass we receive a Tensor containing the gradient of the loss
+        with respect to the output, and we need to compute the gradient of the loss
+        with respect to the input.
+        """
+        input, = ctx.saved_tensors
+        grad_input = grad_output.clone()
+        grad_input[input < -1] *= -0.01
+        grad_input[input > 1] *= -0.01
+        return grad_input
+
 
 class Decoder(nn.Module):
     def __init__(self,
@@ -12,33 +50,65 @@ class Decoder(nn.Module):
                  latent_size: int,
                  output_size: int,
                  prediction_horizon: int,
+                 state_representation,
                  dec_num_layers: int = 1,
                  dec_activation_fn: object = None,
+                 param_groups=None,
                  **kwargs):
         super().__init__()
+        self.param_groups = param_groups
+        self._state_representation = state_representation
         self._prediction_horizon = prediction_horizon
         self.activation_fn = get_activation_function(dec_activation_fn)
-        self.rnn = nn.LSTM(input_size=latent_size + output_size + hidden_size, hidden_size=output_size, num_layers=dec_num_layers, batch_first=True)
+        self.rnn = nn.LSTM(input_size=latent_size + input_size + hidden_size, hidden_size=output_size, num_layers=dec_num_layers, batch_first=True)
         self.fc = nn.Linear(output_size, output_size)
+        self.fc2 = nn.Linear(output_size, output_size)
         self.initial_input = nn.Linear(input_size, output_size)
-        self.initial_hidden1 = nn.Linear(latent_size + output_size + hidden_size, output_size)
-        self.initial_hidden2 = nn.Linear(latent_size + output_size + hidden_size, output_size)
-        self.h0 = nn.Parameter(torch.zeros(dec_num_layers, 1, output_size).normal_(std=0.01), requires_grad=True)
+        self.initial_hidden1 = nn.Linear(latent_size + input_size + hidden_size, output_size)
+        self.initial_hidden2 = nn.Linear(latent_size + input_size + hidden_size, output_size)
         self.dropout = nn.Dropout(0.)
 
-    def forward(self, x: torch.Tensor, enc: torch.Tensor,  z: torch.Tensor) -> torch.Tensor:
+        # self.to_gmm_params = ToGMMParameter(output_size // 21,
+        #                                     output_state_size=4,
+        #                                     dist_state_size=3,
+        #                                     **kwargs)
+
+        self.to_bmm_params = ToBMMParameter(output_size // 21,
+                                            output_state_size=4,
+                                            dist_state_size=4,
+                                            **kwargs)
+
+    def forward(self, x: torch.Tensor, enc: torch.Tensor,  z: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         bs = x.shape[0]
 
         out = []
-        u0 = self.initial_input(x)
+        out_log_diag = []
+        #u0 = self.initial_input(x)
         # Initialize hidden state of rnn
-        xi = torch.cat([z, u0, enc], dim=-1).view(-1, 1, z.shape[-1] + u0.shape[-1] + enc.shape[-1])
-        rnn_h1 = self.initial_hidden1(xi).view(1, xi.shape[0], -1)#self.h0.expand(-1, xi.shape[0], -1).contiguous()
+        xi = torch.cat([z, x, enc], dim=-1).view(-1, 1, z.shape[-1] + x.shape[-1] + enc.shape[-1])
+        rnn_h1 = self.initial_hidden1(xi).view(1, xi.shape[0], -1)
         rnn_h2 = self.initial_hidden2(xi).view(1, xi.shape[0], -1)
+        hidden = (rnn_h1, rnn_h2)
+        loc_start = x.view(bs, x.shape[1], 21, -1)
         for i in range(self._prediction_horizon):
-            rnn_out, (rnn_h1, rnn_h2) = self.rnn(xi, (rnn_h1, rnn_h2))
+            rnn_out, hidden = self.rnn(xi, hidden)
             yi = (rnn_out).view(bs, -1, rnn_out.shape[-1])
-            #yi = self.activation_fn(self.fc(self.dropout(yi)))
-            out.append(yi)
-            xi = torch.cat([z, yi, enc], dim=-1).view(-1, 1, z.shape[-1] + yi.shape[-1] + enc.shape[-1])
-        return torch.stack(out, dim=1)
+            yi = torch.nn.functional.leaky_relu(self.fc(torch.nn.functional.leaky_relu(yi)))
+            yi2 = torch.nn.functional.leaky_relu(self.fc2(torch.nn.functional.leaky_relu(yi)))
+            yi = yi.view(bs, yi.shape[1], 21, -1)
+            yi2 = yi.view(bs, yi2.shape[1], 21, -1)
+            loc, log_Z = self.to_bmm_params(yi, yi2)
+            w = torch.ones(loc.shape[:-1] + (1,), device=loc.device)
+            loc = torch.cat([w, loc], dim=-1)
+            loc = self._state_representation.validate(loc)
+            loc = self._state_representation.sum(loc_start, loc)
+            out.append(loc)
+            out_log_diag.append(log_Z)
+            if self.training and y is not None:
+                teacher_forcing_mask = (torch.rand(list(loc.shape[:-2]) + [1] * 2)
+                                        < self.param_groups[0]['teacher_forcing_factor'])
+                loc_start = teacher_forcing_mask.type_as(y) * y[:, [i]] + (~teacher_forcing_mask).type_as(y) * loc
+            else:
+                loc_start = loc
+            xi = torch.cat([z, loc_start.flatten(start_dim=-2), enc], dim=-1).view(-1, 1, z.shape[-1] + x.shape[-1] + enc.shape[-1])
+        return torch.stack(out, dim=1).contiguous(), torch.stack(out_log_diag, dim=1).contiguous()

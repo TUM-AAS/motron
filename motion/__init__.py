@@ -1,2 +1,2 @@
 from .motion import Motion
-from .node_representation import SingleNodeRepresentation, Skeleton
+from .graph_representation import Skeleton

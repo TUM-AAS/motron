@@ -3,23 +3,26 @@ from typing import Tuple, Union
 import torch
 
 from common.torch import Module
-from motion.components.to_gmm_param import ToGMMParameter
 from motion.core.mgs2s.mgs2s import MGS2S
-from motion.distributions.gmm import GaussianMixtureModel
-from motion.core.gru import GRU
+from motion.distributions import BinghamMixtureModel, GaussianMixtureModel
 from motion.dynamics import Linear
 
 
 class Motion(Module):
-    def __init__(self, node_representation, state_representation, **kwargs):
+    def __init__(self, graph_representation, **kwargs):
         super(Motion, self).__init__()
 
-        self.node_representation = node_representation
+        self.param_groups = [{
+            'teacher_forcing_factor': 0.
+        }]
+
+        self.graph_representation = graph_representation
 
         # Core Model
-        self.core = MGS2S(input_size=node_representation.num_nodes() * state_representation.size(),
-                          feature_size=node_representation.num_nodes(),
-                          state_representation=state_representation,
+        self.core = MGS2S(input_size=graph_representation.num_nodes() * graph_representation.state_representation.size(),
+                          feature_size=graph_representation.num_nodes(),
+                          state_representation=graph_representation.state_representation,
+                          param_groups=self.param_groups,
                           **kwargs
                           )
 
@@ -28,10 +31,6 @@ class Motion(Module):
 
         # Dynamics
         self.dynamics = Linear(**kwargs)
-
-        self.to_gmm_params = ToGMMParameter(input_size=kwargs['output_size'] // node_representation.num_nodes(),
-                                            output_state_size=state_representation.size(),
-                                            **kwargs)
 
     def forward(self, x: torch.Tensor, xb: torch.Tensor = None, y: torch.Tensor = None) -> Union[Tuple[torch.distributions.Distribution, dict], torch.distributions.Distribution]:
         x_shape = x.shape
@@ -49,15 +48,33 @@ class Motion(Module):
         yb = None
         if self.backbone is not None:
             yb = self.backbone(xb)
-        y, z, kwargs = self.core(x_f, yb, y)
-        y = y.view(bs, y.shape[1], y.shape[-2], fn, -1).permute(0, 1, 3, 2, 4)
-        loc, log_dig, tril = self.to_gmm_params(y)
-        loc = x[:, [-1]].unsqueeze(-2) + torch.cumsum(loc, dim=1)
-        dist = GaussianMixtureModel.from_vector_params(z, loc, log_dig, tril)
+        loc, log_Z, z, kwargs = self.core(x_f, yb, y)
+        #y = y.view(bs, y.shape[1], y.shape[-2], fn, -1).permute(0, 1, 3, 2, 4)
+        #loc, log_lam = self.to_bmm_params(y)
+        #loc_n = self.state_representation.validate(loc)
+        #new_loc = []
+        # loc_t = x[:, -1].unsqueeze(dim=-2).repeat(1, 1, 5, 1).contiguous()
+        # for t in range(loc.shape[1]):
+        #     loc_t = self.state_representation.sum(loc_t, loc_n[:, t].contiguous())
+        #     new_loc.append(loc_t)
+        # loc = torch.stack(new_loc, dim=1)
+
+        #loc = self.state_representation.sum(x[:, [-1]].unsqueeze(-2),  loc)
+        loc_q = loc.permute(0, 1, 3, 2, 4).contiguous()
+        log_Z = log_Z.permute(0, 1, 3, 2, 4).contiguous()
+        #dist = BinghamMixtureModel.from_vector_params(z, loc, log_lam)
+
+
+
+        dist = BinghamMixtureModel.from_vector_params(z, loc_q, log_Z)
+
+        #dist = GaussianMixtureModel.from_vector_params(z, loc, log_diag, tril)
+        loc_mode = GaussianMixtureModel.zero_variance(z, loc_q).mode
+        loc_p = self.graph_representation.to_position(loc_mode)
 
         if self.training:
-            return dist, {'z': z, **kwargs}
-        return dist
+            return dist, {'z': z, 'quaternions': loc_mode, 'p': loc_p, **kwargs}
+        return dist, {'quaternions': loc_mode, 'p': loc_p, **kwargs}
 
     def hparams(self):
         return {}

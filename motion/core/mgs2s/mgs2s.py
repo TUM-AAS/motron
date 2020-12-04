@@ -13,8 +13,10 @@ class MGS2S(nn.Module):
                  latent_size: int,
                  feature_size: int,
                  prediction_horizon: int,
+                 param_groups=None,
                  **kwargs):
         super().__init__()
+        self.param_groups = param_groups
         self._latent_size = latent_size
         self._hidden_size = hidden_size
         self._output_size = output_size
@@ -27,6 +29,7 @@ class MGS2S(nn.Module):
                                latent_size=latent_size,
                                output_size=output_size,
                                prediction_horizon=prediction_horizon,
+                               param_groups=self.param_groups,
                                **kwargs)
 
     def forward(self, x: torch.Tensor, b: torch.tensor = None, y: torch.Tensor = None):
@@ -35,7 +38,7 @@ class MGS2S(nn.Module):
         z = torch.distributions.Categorical(logits=self.enc_to_z(enc).unsqueeze(1).unsqueeze(1).repeat(1, self._prediction_horizon, self._feature_size, 1))
 
         # Repeat encoded values for each latent mode
-        z_all = torch.eye(self._latent_size).unsqueeze(0).repeat(bs, 1, 1)  # [bs, ls, ls]
+        z_all = torch.eye(self._latent_size).unsqueeze(0).repeat(bs, 1, 1).to(x.device)  # [bs, ls, ls]
         enc_tiled = enc.unsqueeze(-2).repeat(1, self._latent_size, 1)  # [bs, ls, enc_s]
         x_tiled = x[:, [-1]].repeat(1, self._latent_size, 1)
 
@@ -43,6 +46,6 @@ class MGS2S(nn.Module):
         #z_enc = torch.cat([z_all, enc_rep], dim=-1).view(-1, 1, self._latent_size + self._hidden_size)
 
         # Permute to [bs, ts, ls, fs]
-        y = self.decoder(x_tiled, enc_tiled, z_all)
+        loc, log_Z = self.decoder(x_tiled, enc_tiled, z_all, y)
 
-        return y, z, {}
+        return loc, log_Z, z, {}
