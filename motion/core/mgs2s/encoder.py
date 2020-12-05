@@ -2,10 +2,13 @@ import torch
 import torch.nn as nn
 
 from common.torch import get_activation_function
+from motion.components.graph_linear import GraphLinear
+from motion.components.graph_lstm import GraphLSTM
 
 
 class Encoder(nn.Module):
     def __init__(self,
+                 graph_influence: torch.nn.Parameter,
                  input_size: int,
                  output_size: int,
                  enc_num_layers: int = 1,
@@ -13,13 +16,19 @@ class Encoder(nn.Module):
                  **kwargs):
         super().__init__()
         self.activation_fn = get_activation_function(enc_activation_fn)
-        self.rnn = nn.GRU(input_size=input_size, hidden_size=output_size, num_layers=enc_num_layers, batch_first=True)
-        self.fc = nn.Linear(output_size, output_size)
-        self.h0 = nn.Parameter(torch.zeros(enc_num_layers, 1, output_size).normal_(std=0.01), requires_grad=True)
+        self.rnn = GraphLSTM(graph_influence=graph_influence, input_size=input_size, hidden_size=output_size)
+        self.fc = GraphLinear(graph_influence=graph_influence, in_features=output_size, out_features=output_size)
+        self.initial_hidden1 = GraphLinear(graph_influence=graph_influence, in_features=input_size, out_features=output_size)
+        self.initial_hidden2 = GraphLinear(graph_influence=graph_influence, in_features=input_size, out_features=output_size)
+
+        self.graph_influence = graph_influence
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         bs = x.shape[0]
+
+        rnn_h1 = self.initial_hidden1(x[:, 0])
+        rnn_h2 = self.initial_hidden2(x[:, 0])
+        hidden = (rnn_h1, rnn_h2)
         # Initialize hidden state of rnn
-        rnn_h = self.h0.expand(-1, bs, -1).contiguous()
-        y, _ = self.rnn(x, rnn_h)
+        y, _ = self.rnn(x, hidden)
         return torch.nn.functional.leaky_relu(self.fc(y[:, -1]))

@@ -23,7 +23,7 @@ class Bingham(Distribution):
         super().__init__(batch_shape=batch_shape, event_shape=event_shape)
 
     def log_prob(self, value):
-        value_rep = value.repeat([1] * (len(value.shape)-2) + [self.loc.shape[-2]] + [1])
+        value_rep = value.repeat_interleave(repeats=self.loc.shape[-2], dim=-2)
         loc_view = self.loc.view(-1, self.loc.shape[-1])
         lam_view = self.lam.view(-1, self.lam.shape[-1])
         value_view = value_rep.view(-1, value_rep.shape[-1])

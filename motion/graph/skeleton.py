@@ -7,10 +7,10 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, writers
 
 from common.quaternion import qrot, qmul
-from motion.graph_representation import GraphRepresentation
+from motion.graph import Graph
 
 
-class Skeleton(GraphRepresentation):
+class Skeleton(Graph):
     def __init__(self,
                  offsets: List,
                  parents: List,
@@ -27,8 +27,13 @@ class Skeleton(GraphRepresentation):
         assert len(self._parents.shape) == 1
         assert self._offsets.shape[0] == self._parents.shape[0]
 
+    @property
     def num_nodes(self):
         return len(self._parents)
+
+    @property
+    def adjacency_matrix(self):
+        return self._adjacency_matrix
 
     def to_position(self, x: torch.Tensor) -> torch.Tensor:
         return self.forward_kinematics(x)
@@ -152,10 +157,21 @@ class Skeleton(GraphRepresentation):
         return anim
 
     def _compute_metadata(self):
-        self._has_children = np.zeros(len(self._parents)).astype(bool)
+        self._has_children = torch.zeros(len(self._parents), dtype=torch.bool)
         for i, parent in enumerate(self._parents):
             if parent != -1:
                 self._has_children[parent] = True
+
+        self._compute_adjacency_matrix()
+
+    def _compute_adjacency_matrix(self):
+        self._adjacency_matrix = torch.eye(len(self._parents))
+        for i in range(self.num_nodes):
+            for j in range(self.num_nodes):
+                if self._parents[i] == j or self._parents[j] == i:
+                    self._adjacency_matrix[i, j] = 0.5
+                    self._adjacency_matrix[j, i] = 0.5
+
 
 
 
