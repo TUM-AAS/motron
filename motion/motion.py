@@ -23,7 +23,7 @@ class Motion(Module):
         # Core Model
         self.core = MGS2S(nodes=graph_representation.num_nodes,
                           graph_influence=self.graph_influence_matrix,
-                            input_size=graph_representation.state_representation.size(),# * 2,
+                            input_size=graph_representation.state_representation.size() * 2,
                           feature_size=graph_representation.num_nodes,
                           state_representation=graph_representation.state_representation,
                           param_groups=self.param_groups,
@@ -43,9 +43,9 @@ class Motion(Module):
         if self.backbone is not None:
             yb = self.backbone(xb)
 
-        #delta_q = qmul(x[:, 1:].contiguous(), inverse(x[:, :-1].contiguous()))
-        #delta_q = torch.cat([torch.zeros_like(delta_q[:, [0]]), delta_q], dim=1)
-        #x = torch.cat([x, delta_q], dim=-1)
+        delta_q = qmul(x[:, 1:].contiguous(), inverse(x[:, :-1].contiguous()))
+        delta_q = torch.cat([torch.zeros_like(delta_q[:, [0]]), delta_q], dim=1)
+        x = torch.cat([x, delta_q], dim=-1)
 
         loc, log_Z, z, kwargs = self.core(x, yb, y)
 
