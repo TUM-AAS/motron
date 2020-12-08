@@ -35,6 +35,10 @@ class Skeleton(Graph):
     def adjacency_matrix(self):
         return self._adjacency_matrix
 
+    @property
+    def chain_list(self):
+        return self._chain_list
+
     def to_position(self, x: torch.Tensor) -> torch.Tensor:
         return self.forward_kinematics(x)
 
@@ -163,6 +167,7 @@ class Skeleton(Graph):
                 self._has_children[parent] = True
 
         self._compute_adjacency_matrix()
+        self._compute_chain_list()
 
     def _compute_adjacency_matrix(self):
         self._adjacency_matrix = torch.eye(len(self._parents))
@@ -171,6 +176,15 @@ class Skeleton(Graph):
                 if self._parents[i] == j or self._parents[j] == i:
                     self._adjacency_matrix[i, j] = 0.5
                     self._adjacency_matrix[j, i] = 0.5
+
+    def _compute_chain_list(self):
+        self._chain_list = []
+        for i, parent in enumerate(self._parents):
+            if parent == -1:
+                self._chain_list.append([i])
+            else:
+                self._chain_list.append(self._chain_list[parent] + [i])
+
 
 
 
