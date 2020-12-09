@@ -75,7 +75,8 @@ class Decoder(nn.Module):
         #                                     dist_state_size=3,
         #                                     **kwargs)
 
-        self.to_bmm_params = ToBMMParameter(output_size,
+        self.to_bmm_params = ToBMMParameter(graph_influence,
+                                            output_size,
                                             output_state_size=4,
                                             dist_state_size=4,
                                             **kwargs)
@@ -97,8 +98,6 @@ class Decoder(nn.Module):
             yi = (rnn_out).view(bs, -1, nodes, rnn_out.shape[-1])
             yi = torch.nn.functional.leaky_relu(self.fc(torch.nn.functional.leaky_relu(yi)))
             yi2 = torch.nn.functional.leaky_relu(self.fc2(torch.nn.functional.leaky_relu(yi)))
-            yi = yi.view(bs, yi.shape[1], 21, -1)
-            yi2 = yi.view(bs, yi2.shape[1], 21, -1)
             loc, log_Z = self.to_bmm_params(yi, yi2)
             w = torch.ones(loc.shape[:-1] + (1,), device=loc.device)
             loc = torch.cat([w, loc], dim=-1)

@@ -7,7 +7,7 @@ from common.torch import Module
 
 
 class ToBMMParameter(Module):
-    def __init__(self, input_size: int, output_state_size: int, **kwargs):
+    def __init__(self, graph_influence, input_size: int, output_state_size: int, **kwargs):
         super().__init__()
         self.to_loc = nn.Linear(input_size, output_state_size - 1)
         self.to_log_Z = nn.Linear(input_size, output_state_size - 1)

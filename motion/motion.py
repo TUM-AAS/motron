@@ -1,8 +1,9 @@
 from typing import Tuple, Union
 
 import torch
+import numpy as np
 
-from common.quaternion import inverse, qmul
+from common.quaternion import inverse, qmul, qdist
 from common.torch import Module
 from directional_distributions import Bingham
 from motion.core.mgs2s.mgs2s import MGS2S
@@ -21,7 +22,7 @@ class Motion(Module):
 
         self.graph_representation = graph_representation
 
-        self.graph_influence_matrix = torch.nn.Parameter(self.graph_representation.adjacency_matrix)
+        self.graph_influence_matrix = self.graph_representation.adjacency_matrix
 
         self._chain_list = self.graph_representation.chain_list
 
@@ -42,6 +43,7 @@ class Motion(Module):
         self.dynamics = Linear(**kwargs)
 
     def forward(self, x: torch.Tensor, xb: torch.Tensor = None, y: torch.Tensor = None) -> Union[Tuple[torch.distributions.Distribution, dict], torch.distributions.Distribution]:
+        #x = self.slerp_lp(x)
         if not self.training:
             y = None
         yb = None
@@ -93,3 +95,32 @@ class Motion(Module):
             log_z_desc) * 900.  # force vanisihing gradient towards the limit so that the model can concentrate on the mean
         Z = torch.cat([Z, torch.zeros(Z.shape[:-1] + (1,), device=Z.device)], dim=-1)
         return M, Z
+
+    def slerp_lp(self, x):
+        hrange = 0.4
+        hbias = 0.4
+        low = max(min(hbias - (hrange / 2), 1), 0)
+        high = max(min(hbias + (hrange / 2), 1), 0)
+        hrangeLimited = high - low
+        ts = x.shape[1]
+        xt = x[:, 0]
+        for t in range(1, ts):
+            xt1 = x[:, t]
+            d = qdist(xt, xt1)
+
+            hlpf = (d / np.pi) * hrangeLimited + low
+            xt = self.slerp(xt, xt1, hlpf)
+            x[:, t] = xt
+
+        return x
+
+    def slerp(self, low, high, value):
+        low_norm = low
+        high_norm = high
+        omega = torch.acos((low_norm * high_norm).sum(dim=-1).clamp(min=-1., max=1.))
+        so = torch.sin(omega)
+        mask = (so.abs() > 1e-4).type_as(so)
+        so = mask * so + (1-mask) * torch.ones_like(so)
+        res = (torch.sin((1.0 - value) * omega) / so).unsqueeze(dim=-1) * low + (torch.sin(value * omega) / so).unsqueeze(
+            dim=-1) * high
+        return res * mask.unsqueeze(-1) + (1-mask.unsqueeze(-1)) * high
