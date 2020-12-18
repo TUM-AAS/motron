@@ -16,12 +16,17 @@ class Skeleton(Graph):
                  parents: List,
                  joints_left: List,
                  joints_right: List,
+                 joints_static: List,
+                 joints_type: List,
                  state_representation: str):
         super().__init__(state_representation)
         self._offsets = torch.tensor(offsets)
         self._parents = torch.tensor(parents)
         self._joints_left = torch.tensor(joints_left)
         self._joints_right = torch.tensor(joints_right)
+        self._joints_static = torch.tensor(joints_static)
+        self._joints_type = np.array(joints_type)
+        self._joints_dynamic = torch.tensor([i for i in range(len(self._parents)) if i not in self._joints_static])
         self._compute_metadata()
         assert len(self._offsets.shape) == 2
         assert len(self._parents.shape) == 1
@@ -32,6 +37,10 @@ class Skeleton(Graph):
         return len(self._parents)
 
     @property
+    def num_dynamic_nodes(self):
+        return len(self._joints_dynamic)
+
+    @property
     def adjacency_matrix(self):
         return self._adjacency_matrix
 
@@ -39,10 +48,31 @@ class Skeleton(Graph):
     def chain_list(self):
         return self._chain_list
 
+    @property
+    def dynamic_nodes(self):
+        return self._joints_dynamic
+
+    @property
+    def static_nodes(self):
+        return self._joints_static
+
+    @property
+    def nodes_type_id_dynamic(self):
+        joint_id_string_wo = []
+        for joint_id_string in self._joints_type[self._joints_dynamic]:
+            if 'Left' in joint_id_string:
+                joint_id_string_wo.append(joint_id_string[4:])
+            elif 'Right' in joint_id_string:
+                joint_id_string_wo.append(joint_id_string[5:])
+            else:
+                joint_id_string_wo.append(joint_id_string)
+        joint_ids = [joint_id_string_wo.index(s) for s in joint_id_string_wo]
+        return torch.tensor(joint_ids)
+
     def to_position(self, x: torch.Tensor) -> torch.Tensor:
         return self.forward_kinematics(x)
 
-    def forward_kinematics(self, rotations: torch.Tensor, root_positions: torch.Tensor = None) -> torch.Tensor:
+    def forward_kinematics(self, rotations: torch.Tensor, root_positions: torch.Tensor = None, include_root_rotation=True) -> torch.Tensor:
         """
         Perform forward kinematics using the given trajectory and local rotations.
         Arguments (where N = batch size, L = sequence length, J = number of joints):
@@ -68,7 +98,12 @@ class Skeleton(Graph):
         for i in range(self._offsets.shape[0]):
             if self._parents[i] == -1:
                 positions_world.append(root_positions.expand(list(rotations[:, :, 0].shape[:-1]) + [3]))
-                rotations_world.append(rotations[:, :, 0].contiguous())
+                if include_root_rotation:
+                    rotations_world.append(rotations[:, :, 0].contiguous())
+                else:
+                    root_rotation = torch.zeros_like(rotations[:, :, 0])
+                    root_rotation[..., 0] = 1.
+                    rotations_world.append(root_rotation)
             else:
                 positions_world.append(qrot(rotations_world[self._parents[i]], expanded_offsets[:, :, i]) \
                                        + positions_world[self._parents[i]])
@@ -174,8 +209,12 @@ class Skeleton(Graph):
         for i in range(self.num_nodes):
             for j in range(self.num_nodes):
                 if self._parents[i] == j or self._parents[j] == i:
-                    self._adjacency_matrix[i, j] = 0.5
-                    self._adjacency_matrix[j, i] = 0.5
+                    self._adjacency_matrix[i, j] = 0.
+                    self._adjacency_matrix[j, i] = 0.
+                for k in range(self.num_nodes):
+                    if self._parents[j] == k or self._parents[k] == j:
+                        self._adjacency_matrix[j, k] = 0.
+                        self._adjacency_matrix[k, j] = 0.
 
     def _compute_chain_list(self):
         self._chain_list = []
@@ -184,6 +223,8 @@ class Skeleton(Graph):
                 self._chain_list.append([i])
             else:
                 self._chain_list.append(self._chain_list[parent] + [i])
+
+
 
 
 

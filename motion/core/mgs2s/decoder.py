@@ -4,8 +4,9 @@ import torch.nn as nn
 from common.torch import get_activation_function
 
 # TODO: Idea: Can you use the inverse of the toGMM to populate the first input to the GRU e.g. control->state
-from motion.components.graph_linear import GraphLinear
-from motion.components.graph_lstm import GraphLSTM
+from directional_distributions import Bingham
+from motion.components.graph_linear import GraphLinear, NodeLinear
+from motion.components.graph_lstm import GraphLSTM, NodeLSTM, StackedNodeLSTM
 from motion.components.to_bingham_param import ToBMMParameter
 from motion.components.to_gmm_param import ToGMMParameter
 
@@ -48,6 +49,7 @@ class QuatAct(torch.autograd.Function):
 class Decoder(nn.Module):
     def __init__(self,
                  graph_influence: torch.nn.Parameter,
+                 node_types,
                  input_size: int,
                  hidden_size: int,
                  latent_size: int,
@@ -63,12 +65,14 @@ class Decoder(nn.Module):
         self._state_representation = state_representation
         self._prediction_horizon = prediction_horizon
         self.activation_fn = get_activation_function(dec_activation_fn)
-        self.rnn = GraphLSTM(graph_influence=graph_influence, input_size=latent_size + input_size + hidden_size, hidden_size=output_size)
-        self.fc = GraphLinear(graph_influence=graph_influence, in_features=output_size, out_features=output_size)
-        self.fc2 = GraphLinear(graph_influence=graph_influence, in_features=output_size, out_features=output_size)
-        self.initial_hidden1 = GraphLinear(graph_influence=graph_influence, in_features=latent_size + input_size + hidden_size, out_features=output_size)
-        self.initial_hidden2 = GraphLinear(graph_influence=graph_influence, in_features=latent_size + input_size + hidden_size, out_features=output_size)
-        self.dropout = nn.Dropout(0.)
+        self.rnn = StackedNodeLSTM([{'graph_influence':graph_influence, 'node_types':node_types, 'input_size':latent_size + input_size, 'hidden_size':output_size, 'node_dropout':0.0, 'recurrent_dropout': 0.3},
+                                    {'graph_influence':graph_influence, 'node_types':node_types, 'input_size':output_size, 'hidden_size':output_size, 'node_dropout':0.3, 'recurrent_dropout': 0.3}], dropout=0.3)
+
+        self.fc = NodeLinear(graph_influence=graph_influence, in_features=output_size, out_features=output_size)
+        self.initial_hidden1 = GraphLinear(graph_influence=graph_influence, in_features=hidden_size, out_features=output_size)
+        self.initial_hidden2 = GraphLinear(graph_influence=graph_influence, in_features=hidden_size,
+                                           out_features=output_size)
+        self.dropout = nn.Dropout(0.3)
 
         # self.to_gmm_params = ToGMMParameter(output_size // 21,
         #                                     output_state_size=4,
@@ -88,17 +92,19 @@ class Decoder(nn.Module):
         out_log_diag = []
         #u0 = self.initial_input(x)
         # Initialize hidden state of rnn
-        xi = torch.cat([z, x, enc], dim=-1).view(-1, 1, x.shape[-2], z.shape[-1] + x.shape[-1] + enc.shape[-1])
-        rnn_h1 = self.initial_hidden1(xi.squeeze(1))
-        rnn_h2 = self.initial_hidden2(xi.squeeze(1))
-        hidden = (rnn_h1, rnn_h2)
-        loc_start = x[..., :4]
+        loc_start = x[..., :4].clone()
+
+        xi = torch.cat([z, x], dim=-1).view(-1, 1, x.shape[-2], z.shape[-1] + x.shape[-1])
+        rnn_h1 = self.initial_hidden1(enc.squeeze(1))
+        rnn_h2 = self.initial_hidden2(enc.squeeze(1))
+        hidden = [(rnn_h1, rnn_h2), (rnn_h1, rnn_h2)]
+        G = [torch.Tensor(), torch.Tensor()]
         for i in range(self._prediction_horizon):
-            rnn_out, hidden = self.rnn(xi, hidden)
+            rnn_out, hidden, G = self.rnn((xi), hidden, G)
             yi = (rnn_out).view(bs, -1, nodes, rnn_out.shape[-1])
-            yi = torch.nn.functional.leaky_relu(self.fc(torch.nn.functional.leaky_relu(yi)))
-            yi2 = torch.nn.functional.leaky_relu(self.fc2(torch.nn.functional.leaky_relu(yi)))
-            loc, log_Z = self.to_bmm_params(yi, yi2)
+            yi1 = torch.tanh(self.fc(self.dropout(torch.tanh(yi))))
+            yi2 = yi1.detach()
+            loc, log_Z = self.to_bmm_params(yi1, yi2)
             w = torch.ones(loc.shape[:-1] + (1,), device=loc.device)
             loc = torch.cat([w, loc], dim=-1)
             loc_d = self._state_representation.validate(loc)
@@ -111,5 +117,5 @@ class Decoder(nn.Module):
                 loc_start = teacher_forcing_mask.type_as(y) * y[:, [i]] + (~teacher_forcing_mask).type_as(y) * loc
             else:
                 loc_start = loc
-            xi = torch.cat([z, loc_start, loc_d, enc], dim=-1).view(-1, 1, x.shape[-2], z.shape[-1] + x.shape[-1] + enc.shape[-1])
+            xi = torch.cat([z, loc_start, loc_d], dim=-1).view(-1, 1, x.shape[-2], z.shape[-1] + x.shape[-1])
         return torch.stack(out, dim=1).contiguous(), torch.stack(out_log_diag, dim=1).contiguous()

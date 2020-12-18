@@ -22,6 +22,7 @@ class QuaternionRepresentation(StateRepresentation):
 
     @staticmethod
     def convert_from_quaternions(q):
+        return q
         return qpositive(q)
 
     @staticmethod

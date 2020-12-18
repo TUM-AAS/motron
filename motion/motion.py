@@ -22,15 +22,17 @@ class Motion(Module):
 
         self.graph_representation = graph_representation
 
-        self.graph_influence_matrix = self.graph_representation.adjacency_matrix
-
+        self.graph_influence_matrix = self.graph_representation.adjacency_matrix[self.graph_representation.dynamic_nodes][: ,self.graph_representation.dynamic_nodes]
+        self.node_types = self.graph_representation.nodes_type_id_dynamic
+        self.node_types = torch.tensor([i for i in range(len(self.node_types))])
         self._chain_list = self.graph_representation.chain_list
 
         # Core Model
-        self.core = MGS2S(nodes=graph_representation.num_nodes,
+        self.core = MGS2S(nodes=graph_representation.num_dynamic_nodes,
                           graph_influence=self.graph_influence_matrix,
+                          node_types=self.node_types,
                             input_size=graph_representation.state_representation.size() * 2,
-                          feature_size=graph_representation.num_nodes,
+                          feature_size=graph_representation.num_dynamic_nodes,
                           state_representation=graph_representation.state_representation,
                           param_groups=self.param_groups,
                           **kwargs
@@ -43,7 +45,10 @@ class Motion(Module):
         self.dynamics = Linear(**kwargs)
 
     def forward(self, x: torch.Tensor, xb: torch.Tensor = None, y: torch.Tensor = None) -> Union[Tuple[torch.distributions.Distribution, dict], torch.distributions.Distribution]:
-        #x = self.slerp_lp(x)
+        x = x[..., self.graph_representation.dynamic_nodes, :]
+
+        if y is not None:
+            y = y[..., self.graph_representation.dynamic_nodes, :]
         if not self.training:
             y = None
         yb = None
@@ -54,17 +59,59 @@ class Motion(Module):
         delta_q = torch.cat([torch.zeros_like(delta_q[:, [0]]), delta_q], dim=1)
         x = torch.cat([x, delta_q], dim=-1)
 
+        # if self.training:
+        #     mask = (0.5 > torch.rand_like(x[:, [0]][..., [0]]))
+        #     zero_rot = torch.zeros_like(x)
+        #     zero_rot[..., 0] = 1.
+        #     zero_rot[..., 4] = 1.
+        #     x = mask * x + (~mask) * zero_rot
+
+        # if self.training:
+        #     x_rand = torch.randn_like(x) * 0.03
+        #     x_rand[..., 0] = 1.
+        #     x_rand[..., 4] = 1.
+        #     x_rand[..., :4] = torch.nn.functional.normalize(x_rand[..., :4], dim=-1)
+        #     x_rand[..., 4:] = torch.nn.functional.normalize(x_rand[..., 4:], dim=-1)
+        #     x[..., :4] = qmul(x[..., :4], x_rand[..., :4])
+        #     x[..., 4:] = qmul(x[..., 4:], x_rand[..., 4:])
+
         loc, log_Z, z, kwargs = self.core(x, yb, y)
+
+        z_logits = z.logits
 
         loc_q = loc.permute(0, 1, 3, 2, 4).contiguous()
         log_Z = log_Z.permute(0, 1, 3, 2, 4).contiguous()
+
+        loc_full_shape = list(loc_q.shape)
+        log_Z_full_shape = list(log_Z.shape)
+        z_full_shape = list(z_logits.shape)
+        loc_full_shape[2] = loc_full_shape[2] + len(self.graph_representation.static_nodes)
+        log_Z_full_shape[2] = log_Z_full_shape[2] + len(self.graph_representation.static_nodes)
+        z_full_shape[2] = z_full_shape[2] + len(self.graph_representation.static_nodes)
+
+        loc_full = torch.zeros(loc_full_shape, device=loc_q.device)
+        log_Z_full = torch.zeros(log_Z_full_shape, device=log_Z.device)
+        z_logits_full = torch.zeros(z_full_shape, device=z_logits.device)
+        loc_full[..., 0] = 1.
+        log_Z_full[..., :] = 100.
+        z_logits_full[..., 0] = 1.
+        loc_full[:, :, self.graph_representation.dynamic_nodes] = loc_q
+        log_Z_full[:, :, self.graph_representation.dynamic_nodes] = log_Z
+        z_logits_full[:, :, self.graph_representation.dynamic_nodes] = z_logits
+
+        z = torch.distributions.Categorical(logits=z_logits_full)
+        loc_q = loc_full
+        log_Z = log_Z_full
 
         M, Z = self.to_bingham_M_Z(loc_q, log_Z)
 
         dist_q = BinghamMixtureModel(z, M, Z)
 
         q = GaussianMixtureModel.zero_variance(z, loc_q).mode
-        p = self.graph_representation.to_position(q)
+        if not self.training:
+            p = self.graph_representation.forward_kinematics(q, include_root_rotation=False)  # Careful this is on CPU as of now and slow
+        else:
+            p = None
 
         dist_q_chained = ChainedBinghamMixtureModel(z, ChainedBingham(self._chain_list, Bingham(M, Z)))
 
@@ -89,10 +136,11 @@ class Motion(Module):
         log_z_desc, sort_idx = torch.sort(log_Z, dim=-1, descending=True)
         sort_idx = sort_idx.unsqueeze(-1).repeat([1] * (len(bs) + 1) + [4])
         M = M_uns.gather(dim=-2, index=sort_idx)
-        M = torch.cat([M, qmul(loc, torch.tensor([1., 0, 0, 0], device=loc.device).expand(bs + [4])).unsqueeze(-2)],
+        M = torch.cat([M, loc.unsqueeze(-2)],
                       dim=-2)
         Z = -torch.sigmoid(
-            log_z_desc) * 900.  # force vanisihing gradient towards the limit so that the model can concentrate on the mean
+            log_z_desc) * (900. - 1e-3) - 1e-3  # force vanisihing gradient towards the limit so that the model can concentrate on the mean
+        #Z = -torch.ones_like(Z) * 700
         Z = torch.cat([Z, torch.zeros(Z.shape[:-1] + (1,), device=Z.device)], dim=-1)
         return M, Z
 

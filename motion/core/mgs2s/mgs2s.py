@@ -3,12 +3,14 @@ import torch.nn as nn
 
 from motion.core.mgs2s.decoder import Decoder
 from motion.core.mgs2s.encoder import Encoder
+from motion.core.mgs2s.transformer_encoder import TransformerEncoder
 
 
 class MGS2S(nn.Module):
     def __init__(self,
                  nodes: int,
                  graph_influence: torch.nn.Parameter,
+                 node_types,
                  input_size: int,
                  hidden_size: int,
                  output_size: int,
@@ -25,10 +27,11 @@ class MGS2S(nn.Module):
         self._output_size = output_size
         self._feature_size = feature_size
         self._prediction_horizon = prediction_horizon
-        self.encoder = Encoder(graph_influence=graph_influence, input_size=input_size, output_size=hidden_size, **kwargs)
+        self.encoder = Encoder(graph_influence=graph_influence, node_types=node_types, input_size=input_size, output_size=hidden_size, **kwargs)
         self.enc_to_z = nn.Linear(nodes*hidden_size, latent_size)
         self.decoder = Decoder(
                             graph_influence=graph_influence,
+                            node_types=node_types,
                                 input_size=input_size,
                                hidden_size=hidden_size,
                                latent_size=latent_size,
