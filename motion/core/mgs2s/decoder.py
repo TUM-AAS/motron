@@ -65,14 +65,14 @@ class Decoder(nn.Module):
         self._state_representation = state_representation
         self._prediction_horizon = prediction_horizon
         self.activation_fn = get_activation_function(dec_activation_fn)
-        self.rnn = StackedNodeLSTM([{'graph_influence':graph_influence, 'node_types':node_types, 'input_size':latent_size + input_size, 'hidden_size':output_size, 'node_dropout':0.0, 'recurrent_dropout': 0.3},
-                                    {'graph_influence':graph_influence, 'node_types':node_types, 'input_size':output_size, 'hidden_size':output_size, 'node_dropout':0.3, 'recurrent_dropout': 0.3}], dropout=0.3)
+        self.rnn = StackedNodeLSTM([{'graph_influence':graph_influence, 'node_types':node_types, 'input_size':latent_size + input_size, 'hidden_size':output_size, 'node_dropout':0.0, 'recurrent_dropout': 0.5},
+                                    {'graph_influence':graph_influence, 'node_types':node_types, 'input_size':output_size, 'hidden_size':output_size, 'node_dropout':0.3, 'recurrent_dropout': 0.5}], dropout=0.3)
 
         self.fc = NodeLinear(graph_influence=graph_influence, in_features=output_size, out_features=output_size)
         self.initial_hidden1 = GraphLinear(graph_influence=graph_influence, in_features=hidden_size, out_features=output_size)
         self.initial_hidden2 = GraphLinear(graph_influence=graph_influence, in_features=hidden_size,
                                            out_features=output_size)
-        self.dropout = nn.Dropout(0.3)
+        self.dropout = nn.Dropout(0.5)
 
         # self.to_gmm_params = ToGMMParameter(output_size // 21,
         #                                     output_state_size=4,

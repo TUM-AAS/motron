@@ -5,6 +5,59 @@ import torch.jit as jit
 
 import math
 
+class SingleNodeLSTM(jit.ScriptModule):
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.cell = SingleNodeLSTMCell(**kwargs)
+
+    @jit.script_method
+    def forward(self, input, state):
+        # type: (Tensor, Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]
+        inputs = input.unbind(1)
+        outputs = torch.jit.annotate(List[torch.Tensor], [])
+        for i in range(len(inputs)):
+            out, state = self.cell(inputs[i], state)
+            outputs += [out]
+        return torch.stack(outputs, dim=1), state
+
+class SingleNodeLSTMCell(jit.ScriptModule):
+    def __init__(self, num_nodes, input_size, hidden_size, dropout=0., recurrent_dropout=0.):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+
+        self.weight_ih = torch.nn.Parameter(torch.Tensor(num_nodes, 4 * hidden_size, input_size))
+        self.weight_hh = torch.nn.Parameter(torch.Tensor(num_nodes, 4 * hidden_size, hidden_size))
+        self.bias_ih = torch.nn.Parameter(torch.Tensor(4 * hidden_size))
+        self.bias_hh = torch.nn.Parameter(torch.Tensor(4 * hidden_size))
+        self.dropout = torch.nn.Dropout(dropout)
+        self.r_dropout = torch.nn.Dropout(recurrent_dropout)
+        self.init_weights()
+
+    def init_weights(self):
+        stdv = 1.0 / math.sqrt(self.hidden_size)
+        for weight in self.parameters():
+            weight.data.uniform_(-stdv, stdv)
+
+    @jit.script_method
+    def forward(self, input, state):
+        # type: (Tensor, Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]
+        hx, cx = state
+        hx = self.r_dropout(hx)
+        gates = (ebmm(input, self.weight_ih.transpose(-2, -1)) + self.bias_ih +
+                 ebmm(hx, self.weight_hh.transpose(-2, -1)) + self.bias_hh)
+        ingate, forgetgate, cellgate, outgate = gates.chunk(4, 2)
+
+        ingate = torch.sigmoid(ingate)
+        forgetgate = torch.sigmoid(forgetgate)
+        cellgate = torch.tanh(cellgate)
+        outgate = torch.sigmoid(outgate)
+
+        cy = (forgetgate * cx) + (ingate * cellgate)
+        hy = outgate * torch.tanh(cy)
+
+        return hy, (hy, cy)
+
 
 def ebmm(x, W):
     return torch.einsum('ndo,bnd->bno', (W, x))
