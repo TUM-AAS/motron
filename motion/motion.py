@@ -115,7 +115,7 @@ class Motion(Module):
 
         dist_q_chained = ChainedBinghamMixtureModel(z, ChainedBingham(self._chain_list, Bingham(M, Z)))
 
-        return dist_q_chained, {
+        return dist_q, {
             'dist_q': dist_q,
             'q': q,
             'p': p,
@@ -128,10 +128,11 @@ class Motion(Module):
 
     def to_bingham_M_Z(self, loc, log_Z):
         bs = list(loc.shape[:-1])
+        l_d = loc#.detach()
         M_uns = torch.stack([
-            qmul(loc, torch.tensor([0, 1., 0, 0], device=loc.device).expand(bs + [4])),
-            qmul(loc, torch.tensor([0, 0, 1., 0], device=loc.device).expand(bs + [4])),
-            qmul(loc, torch.tensor([0, 0, 0, 1.], device=loc.device).expand(bs + [4])),
+            qmul(l_d, torch.tensor([0, 1., 0, 0], device=loc.device).expand(bs + [4])),
+            qmul(l_d, torch.tensor([0, 0, 1., 0], device=loc.device).expand(bs + [4])),
+            qmul(l_d, torch.tensor([0, 0, 0, 1.], device=loc.device).expand(bs + [4])),
         ], dim=-2)
         log_z_desc, sort_idx = torch.sort(log_Z, dim=-1, descending=True)
         sort_idx = sort_idx.unsqueeze(-1).repeat([1] * (len(bs) + 1) + [4])
@@ -139,7 +140,7 @@ class Motion(Module):
         M = torch.cat([M, loc.unsqueeze(-2)],
                       dim=-2)
         Z = -torch.sigmoid(
-            log_z_desc) * (900. - 1e-3) - 1e-3  # force vanisihing gradient towards the limit so that the model can concentrate on the mean
+            log_z_desc) * (1950. - 1e-3) - 1e-3  # force vanisihing gradient towards the limit so that the model can concentrate on the mean
         #Z = -torch.ones_like(Z) * 700
         Z = torch.cat([Z, torch.zeros(Z.shape[:-1] + (1,), device=Z.device)], dim=-1)
         return M, Z
