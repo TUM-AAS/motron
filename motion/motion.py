@@ -24,7 +24,7 @@ class Motion(Module):
 
         self.graph_influence_matrix = self.graph_representation.adjacency_matrix[self.graph_representation.dynamic_nodes][: ,self.graph_representation.dynamic_nodes]
         self.node_types = self.graph_representation.nodes_type_id_dynamic
-        self.node_types = torch.tensor([i for i in range(len(self.node_types))])
+        #self.node_types = torch.tensor([i for i in range(len(self.node_types))])
         self._chain_list = self.graph_representation.chain_list
 
         # Core Model
@@ -115,7 +115,7 @@ class Motion(Module):
 
         dist_q_chained = ChainedBinghamMixtureModel(z, ChainedBingham(self._chain_list, Bingham(M, Z)))
 
-        return dist_q, {
+        return dist_q_chained, {
             'dist_q': dist_q,
             'q': q,
             'p': p,
