@@ -5,7 +5,7 @@ from torch.nn import *
 import math
 
 def gmm(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
-    return torch.einsum('ndo,bnd->bno', w, x)
+    return torch.einsum('NDO,BND->BNO', w, x)
 
 
 class GraphLinear(Module):
