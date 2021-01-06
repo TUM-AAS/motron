@@ -79,8 +79,8 @@ class Motion(Module):
 
         z_logits = z.logits
 
-        loc_q = loc.permute(0, 1, 3, 2, 4).contiguous()
-        log_Z = log_Z.permute(0, 1, 3, 2, 4).contiguous()
+        loc_q = loc.permute(0, 2, 3, 1, 4).contiguous()
+        log_Z = log_Z.permute(0, 2, 3, 1, 4).contiguous()
 
         loc_full_shape = list(loc_q.shape)
         log_Z_full_shape = list(log_Z.shape)

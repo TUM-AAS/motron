@@ -7,7 +7,7 @@ from common.torch import get_activation_function
 from directional_distributions import Bingham
 from motion.components.graph_linear import NodeLinear
 from motion.components.graph_lstm import GraphLSTM, NodeLSTM, StackedNodeLSTM
-from motion.components.structural import GraphLinear, StaticGraphLinear, StaticGraphLSTM
+from motion.components.structural import GraphLinear, StaticGraphLinear, StaticGraphLSTM, StaticGraphRNN, BN
 from motion.components.to_bingham_param import ToBMMParameter
 from motion.components.to_gmm_param import ToGMMParameter
 
@@ -66,12 +66,13 @@ class Decoder(nn.Module):
         self._state_representation = state_representation
         self._prediction_horizon = prediction_horizon
         self.activation_fn = get_activation_function(dec_activation_fn)
-        self.rnn = StaticGraphLSTM(input_size, output_size, num_layers=2, graph_influence=graph_influence, learn_influence=True, node_types=node_types, dropout=0.5, recurrent_dropout=0.5, learn_additive_graph_influence=True)
-        self.fc = StaticGraphLinear(output_size, output_size, graph_influence=graph_influence, learn_influence=True, node_types=node_types)
-        self.fc2 = StaticGraphLinear(output_size, output_size, graph_influence=graph_influence, learn_influence=True, node_types=node_types)
-        self.initial_hidden1 = StaticGraphLinear(latent_size + hidden_size, output_size, graph_influence=graph_influence)
-        self.initial_hidden2 = StaticGraphLinear(latent_size + hidden_size, output_size, graph_influence=graph_influence)
-        self.dropout = nn.Dropout(0.5)
+        self.rnn = StaticGraphLSTM(input_size, output_size, num_layers=1, graph_influence=graph_influence, learn_influence=True, node_types=node_types, dropout=0.3, recurrent_dropout=0.0, clockwork=True, learn_additive_graph_influence=False)
+
+        self.fc = StaticGraphLinear(output_size, output_size, graph_influence=graph_influence, learn_influence=False, node_types=node_types)
+        self.fc2 = StaticGraphLinear(output_size, output_size, graph_influence=graph_influence, learn_influence=False, node_types=node_types)
+        self.initial_hidden1 = StaticGraphLinear(latent_size + hidden_size, output_size, graph_influence=graph_influence, weights_per_type=True)
+        self.initial_hidden2 = StaticGraphLinear(latent_size + hidden_size, output_size, graph_influence=graph_influence, weights_per_type=True)
+        self.dropout = nn.Dropout(0.3)
 
         # self.to_gmm_params = ToGMMParameter(output_size // 21,
         #                                     output_state_size=4,
@@ -88,35 +89,35 @@ class Decoder(nn.Module):
         bs = x.shape[0]
         nodes = x.shape[2]
         out = []
+        loc_d_l = []
         out_log_diag = []
         #u0 = self.initial_input(x)
         # Initialize hidden state of rnn
         loc_start = x[..., :4].clone()
 
-        xi = x.view(-1, 1, x.shape[-2], x.shape[-1])
-        enc_z = torch.cat([z, enc], dim=-1).view(-1, enc.shape[-2], z.shape[-1] + enc.shape[-1])
+        xi = x
+        enc_z = torch.cat([z, enc], dim=-1)
         rnn_h1 = self.initial_hidden1(enc_z)
         rnn_h2 = self.initial_hidden2(enc_z)
-        hidden = [(rnn_h1, rnn_h2, None), (rnn_h1, rnn_h2, None)]
+        hidden = [(rnn_h1, rnn_h2, None)]
         for i in range(self._prediction_horizon):
-            rnn_out, hidden = self.rnn((xi), hidden)
+            rnn_out, hidden = self.rnn((xi), hidden, i)
             yi = (rnn_out).squeeze(1)
             yi1 = torch.tanh(self.fc(self.dropout(torch.tanh(yi))))
-            yi1 = yi1.view(bs, -1, nodes, yi1.shape[-1])
             yi2 = torch.tanh(self.fc2(self.dropout(torch.tanh(yi))))
-            yi2 = yi2.view(bs, -1, nodes, yi2.shape[-1])
             loc, log_Z = self.to_bmm_params(yi1, yi2)
             w = torch.ones(loc.shape[:-1] + (1,), device=loc.device)
             loc = torch.cat([w, loc], dim=-1)
             loc_d = self._state_representation.validate(loc)
             loc = self._state_representation.sum(loc_start, loc_d)
             out.append(loc)
+            loc_d_l.append(loc_d)
             out_log_diag.append(log_Z)
-            if self.training and y is not None:
+            if self.param_groups[0]['teacher_forcing_factor'] > 1e-6 and self.training and y is not None:
                 teacher_forcing_mask = (torch.rand(list(loc.shape[:-2]) + [1] * 2)
                                         < self.param_groups[0]['teacher_forcing_factor'])
-                loc_start = teacher_forcing_mask.type_as(y) * y[:, [i]] + (~teacher_forcing_mask).type_as(y) * loc
+                loc_start = teacher_forcing_mask.type_as(y) * y[:, i] + (~teacher_forcing_mask).type_as(y) * loc
             else:
                 loc_start = loc
-            xi = torch.cat([loc_start, loc_d], dim=-1).view(-1, 1, x.shape[-2], x.shape[-1])
-        return torch.stack(out, dim=1).contiguous(), torch.stack(out_log_diag, dim=1).contiguous()
+            xi = torch.cat([loc_start, loc_d], dim=-1).unsqueeze(1)
+        return torch.stack(out, dim=1).contiguous(), torch.stack(loc_d_l, dim=1).contiguous(), torch.stack(out_log_diag, dim=1).contiguous()
