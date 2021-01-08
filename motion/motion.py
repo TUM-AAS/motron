@@ -173,3 +173,12 @@ class Motion(Module):
         res = (torch.sin((1.0 - value) * omega) / so).unsqueeze(dim=-1) * low + (torch.sin(value * omega) / so).unsqueeze(
             dim=-1) * high
         return res * mask.unsqueeze(-1) + (1-mask.unsqueeze(-1)) * high
+
+    def model_loss(self):
+        return 0.
+        w = 0
+        for p in self.parameters():
+            if p.requires_grad:
+                if len(p.shape) == 3 and (p.shape[0] == 17 or p.shape[0] == 21):
+                    w += torch.cdist(p.flatten(start_dim=1), p.flatten(start_dim=1)).mean()
+        return 1e-3 * w

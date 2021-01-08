@@ -21,6 +21,8 @@ class GraphLinear(Module):
 
     def reset_parameters(self) -> None:
         init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if len(self.weight.shape) == 3:
+            self.weight.data[1:] = self.weight.data[0]
         if self.bias is not None:
             fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
             bound = 1 / math.sqrt(fan_in)
@@ -142,6 +144,8 @@ class StaticGraphLSTMCell_(Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
 
+        self.learn_influence = learn_influence
+        self.learn_additive_graph_influence = learn_additive_graph_influence
         if graph_influence is not None:
             assert num_nodes is None, 'Number of Nodes or Graph Influence Matrix has to be given.'
             num_nodes = graph_influence.shape[0]
@@ -196,9 +200,9 @@ class StaticGraphLSTMCell_(Module):
 
         self.clockwork = clockwork
         if clockwork:
-            phase = torch.square(torch.arange(0., hidden_size))
+            phase = torch.arange(0., hidden_size)
             phase = phase - phase.min()
-            phase = (phase / phase.max()) * 9.
+            phase = (phase / phase.max()) * 8.
             phase += 1.
             phase = torch.floor(phase)
             self.register_buffer('phase', phase)
@@ -221,6 +225,8 @@ class StaticGraphLSTMCell_(Module):
             if weight is self.G_add:
                 continue
             weight.data.uniform_(-stdv, stdv)
+            if weight is self.weight_hh or weight is self.weight_ih and len(self.weight_ih.shape) == 3:
+                weight.data[1:] = weight.data[0]
 
     def forward(self, input: torch.Tensor, state: GraphLSTMState, t: int = 0) -> Tuple[torch.Tensor, GraphLSTMState]:
         hx, cx, gx = state
@@ -228,7 +234,9 @@ class StaticGraphLSTMCell_(Module):
             hx = torch.zeros(input.shape[0], self.num_nodes, self.hidden_size, dtype=input.dtype, device=input.device)
         if cx is None:
             cx = torch.zeros(input.shape[0], self.num_nodes, self.hidden_size, dtype=input.dtype, device=input.device)
-        if gx is None:
+        if gx is None and self.learn_influence:
+            gx = torch.softmax(self.G, dim=0)
+        else:
             gx = self.G
 
         hx = self.r_dropout(hx)
@@ -251,6 +259,8 @@ class StaticGraphLSTMCell_(Module):
         hy = outgate * torch.tanh(cy)
 
         gx = gx + self.G_add
+        if self.learn_influence or self.learn_additive_graph_influence:
+            gx = torch.softmax(gx, dim=0)
 
         return hy, (hy, cy, gx)
 

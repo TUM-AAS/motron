@@ -28,7 +28,7 @@ class MGS2S(nn.Module):
         self._feature_size = feature_size
         self._prediction_horizon = prediction_horizon
         self.encoder = Encoder(graph_influence=graph_influence, node_types=node_types, input_size=input_size, output_size=hidden_size, **kwargs)
-        self.enc_to_z = nn.Linear(nodes*hidden_size, latent_size)
+        self.enc_to_z = nn.Linear(nodes*256, latent_size)
         self.decoder = Decoder(
                             graph_influence=graph_influence,
                             node_types=node_types,
@@ -42,9 +42,9 @@ class MGS2S(nn.Module):
 
     def forward(self, x: torch.Tensor, b: torch.tensor = None, y: torch.Tensor = None):
         bs = x.shape[0]
-        enc, enc_s = self.encoder(x)
+        enc, enc_s, enc_r = self.encoder(x)
         z = torch.distributions.Categorical(
-            logits=self.enc_to_z(enc.flatten(start_dim=-2)).unsqueeze(1).unsqueeze(1).repeat(1,
+            logits=self.enc_to_z(enc_r.flatten(start_dim=-2)).unsqueeze(1).unsqueeze(1).repeat(1,
                                                                                              self._prediction_horizon,
                                                                                              self._feature_size, 1))
         # Repeat encoded values for each latent mode

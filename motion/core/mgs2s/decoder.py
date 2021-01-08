@@ -66,13 +66,13 @@ class Decoder(nn.Module):
         self._state_representation = state_representation
         self._prediction_horizon = prediction_horizon
         self.activation_fn = get_activation_function(dec_activation_fn)
-        self.rnn = StaticGraphLSTM(input_size, output_size, num_layers=1, graph_influence=graph_influence, learn_influence=True, node_types=node_types, dropout=0.3, recurrent_dropout=0.0, clockwork=True, learn_additive_graph_influence=False)
+        self.rnn = StaticGraphLSTM(input_size, output_size, num_layers=1, graph_influence=graph_influence, learn_influence=True, node_types=node_types, dropout=0.1, recurrent_dropout=0.5, clockwork=False, learn_additive_graph_influence=True)
 
-        self.fc = StaticGraphLinear(output_size, output_size, graph_influence=graph_influence, learn_influence=False, node_types=node_types)
-        self.fc2 = StaticGraphLinear(output_size, output_size, graph_influence=graph_influence, learn_influence=False, node_types=node_types)
-        self.initial_hidden1 = StaticGraphLinear(latent_size + hidden_size, output_size, graph_influence=graph_influence, weights_per_type=True)
-        self.initial_hidden2 = StaticGraphLinear(latent_size + hidden_size, output_size, graph_influence=graph_influence, weights_per_type=True)
-        self.dropout = nn.Dropout(0.3)
+        self.fc = StaticGraphLinear(output_size, output_size, graph_influence=graph_influence, learn_influence=True, node_types=node_types)
+        self.fc2 = StaticGraphLinear(output_size, output_size, graph_influence=graph_influence, learn_influence=True, node_types=node_types)
+        self.initial_hidden1 = StaticGraphLinear(latent_size + hidden_size, output_size, graph_influence=graph_influence, node_types=node_types)
+        self.initial_hidden2 = StaticGraphLinear(latent_size + hidden_size, output_size, graph_influence=graph_influence, node_types=node_types)
+        self.dropout = nn.Dropout(0.5)
 
         # self.to_gmm_params = ToGMMParameter(output_size // 21,
         #                                     output_state_size=4,
@@ -107,6 +107,7 @@ class Decoder(nn.Module):
             yi2 = torch.tanh(self.fc2(self.dropout(torch.tanh(yi))))
             loc, log_Z = self.to_bmm_params(yi1, yi2)
             w = torch.ones(loc.shape[:-1] + (1,), device=loc.device)
+            loc = loc
             loc = torch.cat([w, loc], dim=-1)
             loc_d = self._state_representation.validate(loc)
             loc = self._state_representation.sum(loc_start, loc_d)
