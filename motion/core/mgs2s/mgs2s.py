@@ -12,7 +12,9 @@ class MGS2S(nn.Module):
                  graph_influence: torch.nn.Parameter,
                  node_types,
                  input_size: int,
-                 hidden_size: int,
+                 encoder_hidden_size: int,
+                 bottleneck_size: int,
+                 decoder_hidden_size: int,
                  output_size: int,
                  latent_size: int,
                  feature_size: int,
@@ -23,17 +25,17 @@ class MGS2S(nn.Module):
         self.param_groups = param_groups
         self._nodes = nodes
         self._latent_size = latent_size
-        self._hidden_size = hidden_size
         self._output_size = output_size
         self._feature_size = feature_size
         self._prediction_horizon = prediction_horizon
-        self.encoder = Encoder(graph_influence=graph_influence, node_types=node_types, input_size=input_size, output_size=hidden_size, **kwargs)
-        self.enc_to_z = nn.Linear(nodes*256, latent_size)
+        self.encoder = Encoder(graph_influence=graph_influence, node_types=node_types, input_size=input_size, hidden_size=encoder_hidden_size, output_size=bottleneck_size, **kwargs)
+        self.enc_to_z = nn.Linear(nodes*bottleneck_size, latent_size)
         self.decoder = Decoder(
                             graph_influence=graph_influence,
                             node_types=node_types,
-                                input_size=input_size,
-                               hidden_size=hidden_size,
+                                input_size=bottleneck_size,
+                                feature_size=input_size,
+                               hidden_size=decoder_hidden_size,
                                latent_size=latent_size,
                                output_size=output_size,
                                prediction_horizon=prediction_horizon,
@@ -42,9 +44,9 @@ class MGS2S(nn.Module):
 
     def forward(self, x: torch.Tensor, b: torch.tensor = None, y: torch.Tensor = None):
         bs = x.shape[0]
-        enc, enc_s, enc_r = self.encoder(x)
+        enc, enc_s = self.encoder(x)
         z = torch.distributions.Categorical(
-            logits=self.enc_to_z(enc_r.flatten(start_dim=-2)).unsqueeze(1).unsqueeze(1).repeat(1,
+            logits=self.enc_to_z(enc.flatten(start_dim=-2)).unsqueeze(1).unsqueeze(1).repeat(1,
                                                                                              self._prediction_horizon,
                                                                                              self._feature_size, 1))
         # Repeat encoded values for each latent mode

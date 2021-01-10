@@ -7,7 +7,7 @@ from common.torch import get_activation_function
 from directional_distributions import Bingham
 from motion.components.graph_linear import NodeLinear
 from motion.components.graph_lstm import GraphLSTM, NodeLSTM, StackedNodeLSTM
-from motion.components.structural import GraphLinear, StaticGraphLinear, StaticGraphLSTM, StaticGraphRNN, BN
+from motion.components.structural import GraphLinear, StaticGraphLinear, StaticGraphLSTM, StaticGraphRNN
 from motion.components.to_bingham_param import ToBMMParameter
 from motion.components.to_gmm_param import ToGMMParameter
 
@@ -51,6 +51,7 @@ class Decoder(nn.Module):
     def __init__(self,
                  graph_influence: torch.nn.Parameter,
                  node_types,
+                 feature_size: int,
                  input_size: int,
                  hidden_size: int,
                  latent_size: int,
@@ -66,13 +67,14 @@ class Decoder(nn.Module):
         self._state_representation = state_representation
         self._prediction_horizon = prediction_horizon
         self.activation_fn = get_activation_function(dec_activation_fn)
-        self.rnn = StaticGraphLSTM(input_size, output_size, num_layers=1, graph_influence=graph_influence, learn_influence=True, node_types=node_types, dropout=0.1, recurrent_dropout=0.5, clockwork=False, learn_additive_graph_influence=True)
+        self.rnn = StaticGraphLSTM(feature_size, hidden_size, num_layers=1, graph_influence=graph_influence, learn_influence=True, node_types=node_types, dropout=0.0, recurrent_dropout=0.0, clockwork=True, learn_additive_graph_influence=True)
 
-        self.fc = StaticGraphLinear(output_size, output_size, graph_influence=graph_influence, learn_influence=True, node_types=node_types)
-        self.fc2 = StaticGraphLinear(output_size, output_size, graph_influence=graph_influence, learn_influence=True, node_types=node_types)
-        self.initial_hidden1 = StaticGraphLinear(latent_size + hidden_size, output_size, graph_influence=graph_influence, node_types=node_types)
-        self.initial_hidden2 = StaticGraphLinear(latent_size + hidden_size, output_size, graph_influence=graph_influence, node_types=node_types)
-        self.dropout = nn.Dropout(0.5)
+        self.fc = StaticGraphLinear(hidden_size, output_size, graph_influence=graph_influence, learn_influence=True, node_types=node_types)
+        self.fc2 = StaticGraphLinear(hidden_size, output_size, graph_influence=graph_influence, learn_influence=True, node_types=node_types)
+        self.initial_hidden1 = StaticGraphLinear(latent_size + input_size, hidden_size, graph_influence=graph_influence, node_types=node_types)
+        self.initial_hidden2 = StaticGraphLinear(latent_size + input_size, hidden_size, graph_influence=graph_influence, node_types=node_types)
+        self.dropout = nn.Dropout(0.0)
+        self.dropout1 = nn.Dropout(0.0)
 
         # self.to_gmm_params = ToGMMParameter(output_size // 21,
         #                                     output_state_size=4,
@@ -80,6 +82,7 @@ class Decoder(nn.Module):
         #                                     **kwargs)
 
         self.to_bmm_params = ToBMMParameter(graph_influence,
+                                            node_types,
                                             output_size,
                                             output_state_size=4,
                                             dist_state_size=4,
@@ -104,7 +107,7 @@ class Decoder(nn.Module):
             rnn_out, hidden = self.rnn((xi), hidden, i)
             yi = (rnn_out).squeeze(1)
             yi1 = torch.tanh(self.fc(self.dropout(torch.tanh(yi))))
-            yi2 = torch.tanh(self.fc2(self.dropout(torch.tanh(yi))))
+            yi2 = torch.tanh(self.fc2(self.dropout1(torch.tanh(yi))))
             loc, log_Z = self.to_bmm_params(yi1, yi2)
             w = torch.ones(loc.shape[:-1] + (1,), device=loc.device)
             loc = loc

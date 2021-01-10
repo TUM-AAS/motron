@@ -181,4 +181,4 @@ class Motion(Module):
             if p.requires_grad:
                 if len(p.shape) == 3 and (p.shape[0] == 17 or p.shape[0] == 21):
                     w += torch.cdist(p.flatten(start_dim=1), p.flatten(start_dim=1)).mean()
-        return 1e-3 * w
+        return 1e-2 * w

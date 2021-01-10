@@ -235,7 +235,7 @@ class StaticGraphLSTMCell_(Module):
         if cx is None:
             cx = torch.zeros(input.shape[0], self.num_nodes, self.hidden_size, dtype=input.dtype, device=input.device)
         if gx is None and self.learn_influence:
-            gx = torch.softmax(self.G, dim=0)
+            gx = self.G / self.G.sum(dim=0, keepdim=True)
         else:
             gx = self.G
 
@@ -260,7 +260,7 @@ class StaticGraphLSTMCell_(Module):
 
         gx = gx + self.G_add
         if self.learn_influence or self.learn_additive_graph_influence:
-            gx = torch.softmax(gx, dim=0)
+            gx = gx / gx.sum(dim=0, keepdim=True)
 
         return hy, (hy, cy, gx)
 
