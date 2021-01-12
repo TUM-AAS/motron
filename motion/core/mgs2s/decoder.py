@@ -67,14 +67,14 @@ class Decoder(nn.Module):
         self._state_representation = state_representation
         self._prediction_horizon = prediction_horizon
         self.activation_fn = get_activation_function(dec_activation_fn)
-        self.rnn = StaticGraphLSTM(feature_size, hidden_size, num_layers=1, graph_influence=graph_influence, learn_influence=True, node_types=node_types, dropout=0.0, recurrent_dropout=0.0, clockwork=True, learn_additive_graph_influence=True)
+        self.rnn = StaticGraphLSTM(feature_size, hidden_size, num_layers=1, graph_influence=graph_influence, learn_influence=True, node_types=node_types, dropout=0.5, recurrent_dropout=0., clockwork=True, learn_additive_graph_influence=True)
 
         self.fc = StaticGraphLinear(hidden_size, output_size, graph_influence=graph_influence, learn_influence=True, node_types=node_types)
         self.fc2 = StaticGraphLinear(hidden_size, output_size, graph_influence=graph_influence, learn_influence=True, node_types=node_types)
         self.initial_hidden1 = StaticGraphLinear(latent_size + input_size, hidden_size, graph_influence=graph_influence, node_types=node_types)
         self.initial_hidden2 = StaticGraphLinear(latent_size + input_size, hidden_size, graph_influence=graph_influence, node_types=node_types)
-        self.dropout = nn.Dropout(0.0)
-        self.dropout1 = nn.Dropout(0.0)
+        self.dropout = nn.Dropout(0.2)
+        self.dropout1 = nn.Dropout(0.2)
 
         # self.to_gmm_params = ToGMMParameter(output_size // 21,
         #                                     output_state_size=4,

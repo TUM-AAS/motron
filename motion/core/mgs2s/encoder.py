@@ -26,7 +26,7 @@ class Encoder(nn.Module):
 
         self.graph_influence = graph_influence
 
-        self.dropout = nn.Dropout(0.0)
+        self.dropout = nn.Dropout(0.5)
 
     def forward(self, x: torch.Tensor, state: torch.Tensor = None) -> torch.Tensor:
         bs = x.shape[0]
