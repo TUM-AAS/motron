@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from motion.core.mgs2s.decoder import Decoder
 from motion.core.mgs2s.encoder import Encoder
-from motion.core.mgs2s.transformer_encoder import TransformerEncoder
+from motion.core.mgs2s.transformer_encoder import MyTransformerEncoder
 
 
 class MGS2S(nn.Module):
@@ -54,9 +54,9 @@ class MGS2S(nn.Module):
             repeats=enc.shape[-2], dim=-2).to(x.device)  # [bs, ls, ls]
         enc = enc.repeat_interleave(repeats=self._latent_size, dim=0)  # [bs, ls, enc_s]
         x_tiled = x[:, [-1]].repeat_interleave(repeats=self._latent_size, dim=0)
-        enc_s = [(h.repeat_interleave(repeats=self._latent_size, dim=0),
-                  c.repeat_interleave(repeats=self._latent_size, dim=0),
-                  g) for h, c, g in enc_s]
+        # enc_s = [(h.repeat_interleave(repeats=self._latent_size, dim=0),
+        #           c.repeat_interleave(repeats=self._latent_size, dim=0),
+        #           g) for h, c, g in enc_s]
         loc_l = []
         loc_d_l = []
         log_Z_l = []
