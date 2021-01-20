@@ -29,12 +29,16 @@ class GraphLinear(Module):
             init.uniform_(self.bias, -bound, bound)
 
     def forward(self, input: torch.Tensor, g: torch.Tensor = None) -> torch.Tensor:
-        if g is None:
+        if g is None and self.learn_influence:
+            g = torch.nn.functional.normalize(self.G, p=1, dim=1)
+        elif g is None:
             g = self.G
         w = self.weight[self.node_type_index]
-        output = g.matmul(self.mm(input, w.transpose(-2, -1)))# / g.shape[-1]
+        output = self.mm(input, w.transpose(-2, -1))
         if self.bias is not None:
             output += self.bias
+        output = g.matmul(output)# / g.shape[-1]
+
         return output
 
 
@@ -65,6 +69,8 @@ class StaticGraphLinear(GraphLinear):
         :param bias: If set to ``False``, the layer will not learn an additive bias.
         """
         super().__init__(*args)
+
+        self.learn_influence = learn_influence
 
         if graph_influence is not None:
             assert num_nodes is None, 'Number of Nodes or Graph Influence Matrix has to be given.'
@@ -235,8 +241,8 @@ class StaticGraphLSTMCell_(Module):
         if cx is None:
             cx = torch.zeros(input.shape[0], self.num_nodes, self.hidden_size, dtype=input.dtype, device=input.device)
         if gx is None and self.learn_influence:
-            gx = torch.softmax(self.G, dim=0)
-        else:
+            gx = torch.nn.functional.normalize(self.G, p=1, dim=1)
+        elif gx is None:
             gx = self.G
 
         hx = self.r_dropout(hx)
@@ -246,8 +252,9 @@ class StaticGraphLSTMCell_(Module):
 
         c_mask = (torch.remainder(torch.tensor(t + 1., device=input.device), self.phase) < 0.01).type_as(cx)
 
-        gates = (torch.matmul(gx, self.dropout(self.mm(input, weight_ih.transpose(-2, -1)))) + self.bias_ih +
-                 torch.matmul(gx, self.mm(hx, weight_hh.transpose(-2, -1))) + self.bias_hh)
+        gates = (self.dropout(self.mm(input, weight_ih.transpose(-2, -1))) +
+                 self.mm(hx, weight_hh.transpose(-2, -1)) + self.bias_hh)
+        gates = torch.matmul(gx, gates)
         ingate, forgetgate, cellgate, outgate = gates.chunk(4, 2)
 
         ingate = torch.sigmoid(ingate)
@@ -260,7 +267,7 @@ class StaticGraphLSTMCell_(Module):
 
         gx = gx + self.G_add
         if self.learn_influence or self.learn_additive_graph_influence:
-            gx = torch.softmax(gx, dim=0)
+            gx = torch.nn.functional.normalize(gx, p=1, dim=1)
 
         return hy, (hy, cy, gx)
 

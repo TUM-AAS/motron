@@ -141,7 +141,7 @@ class MyTransformerEncoder(Module):
         self.initial_hidden1 = StaticGraphLinear(input_size, hidden_size, num_nodes=21)
         self.initial_hidden2 = StaticGraphLinear(input_size, hidden_size, num_nodes=21)
 
-        encoder_layers = TransformerLayer(d_model=output_size, nhead=4, dropout=0.5, kdim=output_size+4)
+        encoder_layers = TransformerLayer(d_model=output_size, nhead=4, dropout=0.1, kdim=output_size+4)
         self.transformer_encoder = TransformerEncoderML(encoder_layers, 3)
         self.fc = Linear(in_features=hidden_size, out_features=output_size)
         self.dropout = Dropout(0.0)

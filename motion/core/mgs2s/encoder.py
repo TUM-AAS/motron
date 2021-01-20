@@ -36,4 +36,4 @@ class Encoder(nn.Module):
             state = [(rnn_h1, rnn_h2, None)]
         # Initialize hidden state of rnn
         y, state = self.rnn(x, state)
-        return torch.tanh(self.fc(self.dropout(y[:, -1]))), state
+        return torch.relu(self.fc(self.dropout(y[:, -1]))), state

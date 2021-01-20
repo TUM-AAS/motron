@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from motion.core.mgs2s.decoder import Decoder
 from motion.core.mgs2s.encoder import Encoder
+from motion.core.mgs2s.transformer_decoder import MyTransformerDecoder
 from motion.core.mgs2s.transformer_encoder import MyTransformerEncoder
 
 
