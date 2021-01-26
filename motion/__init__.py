@@ -1,2 +1,3 @@
 from .motion import Motion
-from .graph import Skeleton
+from .quaternion import Quaternion
+from .skeleton import Skeleton

@@ -1,79 +1,104 @@
+from typing import Union
+
 import torch
 import torch.nn as nn
+from torch.distributions import MixtureSameFamily
 
+from motion.components.structural import StaticGraphLinear
 from motion.core.mgs2s.decoder import Decoder
 from motion.core.mgs2s.encoder import Encoder
-from motion.core.mgs2s.transformer_decoder import MyTransformerDecoder
-from motion.core.mgs2s.transformer_encoder import MyTransformerEncoder
+from motion.utils.torch import mutual_inf_px
 
 
 class MGS2S(nn.Module):
     def __init__(self,
-                 nodes: int,
-                 graph_influence: torch.nn.Parameter,
-                 node_types,
+                 num_nodes: int,
                  input_size: int,
                  encoder_hidden_size: int,
                  bottleneck_size: int,
                  decoder_hidden_size: int,
                  output_size: int,
                  latent_size: int,
-                 feature_size: int,
                  prediction_horizon: int,
+                 G: Union[torch.Tensor, torch.nn.Parameter] = None,
+                 T: torch.Tensor = None,
                  param_groups=None,
                  **kwargs):
         super().__init__()
         self.param_groups = param_groups
-        self._nodes = nodes
+
+        self._num_nodes = num_nodes
         self._latent_size = latent_size
-        self._output_size = output_size
-        self._feature_size = feature_size
         self._prediction_horizon = prediction_horizon
-        self.encoder = Encoder(graph_influence=graph_influence, node_types=node_types, input_size=input_size, hidden_size=encoder_hidden_size, output_size=bottleneck_size, **kwargs)
-        self.enc_to_z = nn.Linear(nodes*bottleneck_size, latent_size)
-        self.decoder = Decoder(
-                            graph_influence=graph_influence,
-                            node_types=node_types,
-                                input_size=bottleneck_size,
-                                feature_size=input_size,
+
+        self.encoder = Encoder(num_nodes=num_nodes,
+                               input_size=input_size,
+                               hidden_size=encoder_hidden_size,
+                               output_size=bottleneck_size,
+                               G=G,
+                               T=T,
+                               **kwargs)
+
+        self.enc_to_z = StaticGraphLinear(encoder_hidden_size,
+                                          latent_size,
+                                          bias=False,
+                                          learn_influence=True,
+                                          num_nodes=num_nodes,
+                                          node_types=T)
+
+        self.decoder = Decoder(num_nodes=num_nodes,
+                               input_size=bottleneck_size,
+                               feature_size=input_size,
                                hidden_size=decoder_hidden_size,
                                latent_size=latent_size,
                                output_size=output_size,
                                prediction_horizon=prediction_horizon,
+                               G=G,
+                               T=T,
                                param_groups=self.param_groups,
                                **kwargs)
 
-    def forward(self, x: torch.Tensor, b: torch.tensor = None, y: torch.Tensor = None):
+        self.z_dropout = nn.Dropout(0.1)
+
+    def forward(self, x: torch.Tensor, x_org, b: torch.tensor = None, y: torch.Tensor = None):
         bs = x.shape[0]
-        enc, enc_s = self.encoder(x)
-        z = torch.distributions.Categorical(
-            logits=self.enc_to_z(enc.flatten(start_dim=-2)).unsqueeze(1).unsqueeze(1).repeat(1,
-                                                                                             self._prediction_horizon,
-                                                                                             self._feature_size, 1))
-        # Repeat encoded values for each latent mode
-        z_all = torch.eye(self._latent_size).repeat(bs, 1).unsqueeze(-2).repeat_interleave(
-            repeats=enc.shape[-2], dim=-2).to(x.device)  # [bs, ls, ls]
-        enc = enc.repeat_interleave(repeats=self._latent_size, dim=0)  # [bs, ls, enc_s]
-        x_tiled = x[:, [-1]].repeat_interleave(repeats=self._latent_size, dim=0)
-        # enc_s = [(h.repeat_interleave(repeats=self._latent_size, dim=0),
-        #           c.repeat_interleave(repeats=self._latent_size, dim=0),
-        #           g) for h, c, g in enc_s]
-        loc_l = []
-        loc_d_l = []
-        log_Z_l = []
-        # for pred in range(self._prediction_horizon // 5 - 1):
-        #     loc, loc_d, log_Z = self.decoder(x_tiled, enc, z_all, y)
-        #     enc, enc_s = self.encoder(torch.cat([loc, loc_d], dim=-1), enc_s)
-        #     loc_l.append(loc)
-        #     log_Z_l.append(log_Z)
 
+        # Encode History
+        h, _, h_f = self.encoder(x)  # [B, N, D]
+
+        # Same z for all nodes and all timesteps
+        z_logits = self.z_dropout(self.enc_to_z(h_f)).unsqueeze(1)  # [B, 1, N Z]
+        z_logits = z_logits.repeat(1, self._prediction_horizon, 1, 1)  # [B, T, N, Z]
+        p_z = torch.distributions.Categorical(logits=z_logits)
+
+        # Sample all z
+        z_mask = torch.eye(self._latent_size, device=x.device)
+        z_mask = z_mask.repeat(bs, 1).unsqueeze(-2).repeat_interleave(repeats=h.shape[-2], dim=-2)  # [B * Z, N, Z]
+        z = z_mask #p_z.probs[:, 0].repeat_interleave(repeats=self._latent_size, dim=0) * z_mask
+
+        # Repeat hidden for each |z|
+        h = h.repeat_interleave(repeats=self._latent_size, dim=0)  # [B * Z, N, D]
+
+        # Repeat last two D for each |z|
+        x_tiled = x[:, -2:].repeat_interleave(repeats=self._latent_size, dim=0)  # [B * Z, N, D]
+
+        x_org_tiled = x_org[:, -1].repeat_interleave(repeats=self._latent_size, dim=0)
+
+        # Repeat y for each |z|
         if y is not None:
-            y = y.repeat_interleave(repeats=self._latent_size, dim=0)
+            y = y.repeat_interleave(repeats=self._latent_size, dim=0)  # [B * Z, T, N, D]
 
-        loc, loc_d, log_Z = self.decoder(x_tiled, enc, z_all, y)
-        loc_l.append(loc)
-        log_Z_l.append(log_Z)
+        # Decode future q
+        q, Z = self.decoder(x_tiled, h, z, x_org_tiled, y)  # [B * Z, T, N, D]
 
-        loc = torch.cat(loc_l, dim=1)
-        log_Z = torch.cat(log_Z_l, dim=1)
-        return loc.view((bs, -1) + loc.shape[1:]), log_Z.view((bs, -1) + log_Z.shape[1:]), z, {}
+        # Reshape
+        q = q.view((bs, -1) + q.shape[1:])  # [B, Z, T, N, D]
+        Z = Z.view((bs, -1) + Z.shape[1:])  # [B, Z, T, N, D]
+
+        return q, Z, p_z, {}
+
+    def loss(self, y_pred: MixtureSameFamily, y: torch.Tensor) -> torch.Tensor:
+        ll = y_pred.log_prob(y).sum(dim=1).mean()
+        mi = mutual_inf_px(y_pred.mixture_distribution)
+        max_i = y_pred.mixture_distribution.probs.amax(dim=[0, 1]).amin(dim=-1).mean()
+        return -ll - mi #- max_i

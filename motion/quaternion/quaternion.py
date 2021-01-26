@@ -1,0 +1,201 @@
+import torch
+
+
+class Quaternion(object):
+    def __init__(self, q):
+        if isinstance(q, Quaternion):
+            self._q = q._q
+            return
+        assert q.shape[-1] == 4, 'Quaternion has to be of dimension 4'
+        self._q = q
+
+    def __mul__(self, other):
+        if isinstance(other, Quaternion):
+            return self.__class__(torch.matmul(self._q_matrix(), other._q.unsqueeze(-1)).squeeze(-1))
+        return self * self.__class__(other)
+
+    @classmethod
+    def mul_(cls, q1, q2):
+        return (cls(q1) * cls(q2)).q
+
+    def __repr__(self):
+        return f"Quaternion: {self._q.__repr__()}"
+
+    def _q_matrix(self):
+        """Matrix representation of quaternion for multiplication purposes.
+        """
+        return torch.stack([
+            torch.stack([self._q[..., 0], -self._q[..., 1], -self._q[..., 2], -self._q[..., 3]], dim=-1),
+            torch.stack([self._q[..., 1],  self._q[..., 0], -self._q[..., 3],  self._q[..., 2]], dim=-1),
+            torch.stack([self._q[..., 2],  self._q[..., 3],  self._q[..., 0], -self._q[..., 1]], dim=-1),
+            torch.stack([self._q[..., 3], -self._q[..., 2],  self._q[..., 1],  self._q[..., 0]], dim=-1)], dim=-2)
+
+    def _q_bar_matrix(self):
+        """Matrix representation of quaternion for multiplication purposes.
+        """
+        return torch.stack([
+            torch.stack([self._q[..., 0], -self._q[..., 1], -self._q[..., 2], -self._q[..., 3]], dim=-1),
+            torch.stack([self._q[..., 1],  self._q[..., 0],  self._q[..., 3], -self._q[..., 2]], dim=-1),
+            torch.stack([self._q[..., 2], -self._q[..., 3],  self._q[..., 0],  self._q[..., 1]], dim=-1),
+            torch.stack([self._q[..., 3],  self._q[..., 2], -self._q[..., 1],  self._q[..., 0]], dim=-1)], dim=-2)
+
+    def _rotate_quaternion(self, q):
+        """Rotate a quaternion vector using the stored rotation.
+
+        Params:
+            q: The vector to be rotated, in quaternion form (0 + xi + yj + kz)
+
+        Returns:
+            A Quaternion object representing the rotated vector in quaternion from (0 + xi + yj + kz)
+        """
+        self._normalize()
+        return self.__class__(self * q * self.conjugate)
+
+    @classmethod
+    def rotate_(cls, q, v):
+        return cls(q).rotate(v)
+
+    def rotate(self, vector):
+        """Rotate a 3D vector by the rotation stored in the Quaternion object.
+
+        Params:
+            vector: A 3-vector specified as any ordered sequence of 3 real numbers corresponding to x, y, and z values.
+                Some types that are recognised are: numpy arrays, lists and tuples.
+                A 3-vector can also be represented by a Quaternion object who's scalar part is 0 and vector part is the required 3-vector.
+                Thus it is possible to call `Quaternion.rotate(q)` with another quaternion object as an itorch.t.
+
+        Returns:
+            The rotated vector returned as the same type it was specified at itorch.t.
+
+        Raises:
+            TypeError: if any of the vector elements cannot be converted to a real number.
+            ValueError: if `vector` cannot be interpreted as a 3-vector or a Quaternion object.
+
+        """
+        if isinstance(vector, Quaternion):
+            return self._rotate_quaternion(vector)
+        q = Quaternion(torch.cat([torch.zeros_like(vector[..., [0]]), vector], dim=-1))
+        a = self._rotate_quaternion(q).vector
+        return a
+
+    @classmethod
+    def conjugate_(cls, q):
+        return cls(q).conjugate.q
+
+    @property
+    def conjugate(self):
+        """Quaternion conjugate, encapsulated in a new instance.
+        For a unit quaternion, this is the same as the inverse.
+        Returns:
+            A new Quaternion object clone with its vector part negated
+        """
+        return self.__class__(torch.cat([self.scalar.unsqueeze(-1), -self.vector], dim=-1))
+
+    def _normalize(self):
+        """Object is guaranteed to be a unit quaternion after calling this
+        operation UNLESS the object is equivalent to Quaternion(0)
+        """
+        self._q = torch.nn.functional.normalize(self._q, dim=-1)
+
+    @property
+    def scalar(self):
+        """ Return the real or scalar component of the quaternion object.
+
+        Returns:
+            A real number i.e. float
+        """
+        return self._q[..., 0]
+
+    @property
+    def vector(self):
+        """ Return the imaginary or vector component of the quaternion object.
+
+        Returns:
+            A numpy 3-array of floats. NOT guaranteed to be a unit vector
+        """
+        return self._q[..., 1:]
+
+    @classmethod
+    def rotation_matrix_(cls, q):
+        return cls(q).rotation_matrix
+
+    @property
+    def rotation_matrix(self):
+        """Get the 3x3 rotation matrix equivalent of the quaternion rotation.
+
+        Returns:
+            A 3x3 orthogonal rotation matrix as a 3x3 Numpy array
+
+        Note:
+            This feature only makes sense when referring to a unit quaternion.
+            Calling this method will implicitly normalise the Quaternion object to a unit quaternion if it is not already one.
+
+        """
+        self._normalize()
+        product_matrix = torch.matmul(self._q_matrix(), self._q_bar_matrix().conj().transpose(-2, -1))
+        return product_matrix[..., 1:, 1:]
+
+    @property
+    def normalized(self):
+        """Get a unit quaternion (versor) copy of this Quaternion object.
+
+        A unit quaternion has a `norm` of 1.0
+
+        Returns:
+            A new Quaternion object clone that is guaranteed to be a unit quaternion
+        """
+        q = Quaternion(self._q)
+        q._normalize()
+        return q
+
+    @property
+    def q(self):
+        return self._q
+
+    @classmethod
+    def euler_angle_(cls, q, order, epsilon=0.):
+        return cls(q).euler_angle(order, epsilon)
+
+    def euler_angle(self, order: str, epsilon: float = 0.):
+        """
+        Convert quaternion(s) q to Euler angles.
+        """
+        assert self.q.shape[-1] == 4
+
+        original_shape = list(self.q.shape)
+        original_shape[-1] = 3
+        q = self.q.view(-1, 4)
+
+        q0 = q[:, 0]
+        q1 = q[:, 1]
+        q2 = q[:, 2]
+        q3 = q[:, 3]
+
+        if order == 'xyz':
+            x = torch.atan2(2 * (q0 * q1 - q2 * q3), 1 - 2 * (q1 * q1 + q2 * q2))
+            y = torch.asin(torch.clamp(2 * (q1 * q3 + q0 * q2), -1 + epsilon, 1 - epsilon))
+            z = torch.atan2(2 * (q0 * q3 - q1 * q2), 1 - 2 * (q2 * q2 + q3 * q3))
+        elif order == 'yzx':
+            x = torch.atan2(2 * (q0 * q1 - q2 * q3), 1 - 2 * (q1 * q1 + q3 * q3))
+            y = torch.atan2(2 * (q0 * q2 - q1 * q3), 1 - 2 * (q2 * q2 + q3 * q3))
+            z = torch.asin(torch.clamp(2 * (q1 * q2 + q0 * q3), -1 + epsilon, 1 - epsilon))
+        elif order == 'zxy':
+            x = torch.asin(torch.clamp(2 * (q0 * q1 + q2 * q3), -1 + epsilon, 1 - epsilon))
+            y = torch.atan2(2 * (q0 * q2 - q1 * q3), 1 - 2 * (q1 * q1 + q2 * q2))
+            z = torch.atan2(2 * (q0 * q3 - q1 * q2), 1 - 2 * (q1 * q1 + q3 * q3))
+        elif order == 'xzy':
+            x = torch.atan2(2 * (q0 * q1 + q2 * q3), 1 - 2 * (q1 * q1 + q3 * q3))
+            y = torch.atan2(2 * (q0 * q2 + q1 * q3), 1 - 2 * (q2 * q2 + q3 * q3))
+            z = torch.asin(torch.clamp(2 * (q0 * q3 - q1 * q2), -1 + epsilon, 1 - epsilon))
+        elif order == 'yxz':
+            x = torch.asin(torch.clamp(2 * (q0 * q1 - q2 * q3), -1 + epsilon, 1 - epsilon))
+            y = torch.atan2(2 * (q1 * q3 + q0 * q2), 1 - 2 * (q1 * q1 + q2 * q2))
+            z = torch.atan2(2 * (q1 * q2 + q0 * q3), 1 - 2 * (q1 * q1 + q3 * q3))
+        elif order == 'zyx':
+            x = torch.atan2(2 * (q0 * q1 + q2 * q3), 1 - 2 * (q1 * q1 + q2 * q2))
+            y = torch.asin(torch.clamp(2 * (q0 * q2 - q1 * q3), -1 + epsilon, 1 - epsilon))
+            z = torch.atan2(2 * (q0 * q3 + q1 * q2), 1 - 2 * (q2 * q2 + q3 * q3))
+        else:
+            raise
+
+        return torch.stack((x, y, z), dim=1).view(original_shape)

@@ -3,7 +3,6 @@ from typing import Type
 import torch
 import torch.nn as nn
 
-from common.torch import get_activation_function, Module
 from motion.state_representation import StateRepresentation
 
 
