@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 
 import torch
 from torch import Tensor
@@ -102,8 +102,8 @@ class TransformerLayer(Module):
         """
         src2 = self.self_attn(query, key, value, attn_mask=src_mask,
                               key_padding_mask=src_key_padding_mask)[0]
-        src = query + self.dropout1(src2)
-        return src
+        #src = query + self.dropout1(src2)
+        return src2
 
 
 class PositionalEncoding(Module):
@@ -126,41 +126,62 @@ class PositionalEncoding(Module):
 
 class MyTransformerEncoder(Module):
     def __init__(self,
-                 graph_influence: torch.nn.Parameter,
-                 node_types,
+                 num_nodes: int,
                  input_size: int,
                  hidden_size: int,
                  output_size: int,
+                 G: Union[torch.Tensor, torch.nn.Parameter] = None,
+                 T: torch.Tensor = None,
                  enc_num_layers: int = 1,
-                 enc_activation_fn: object = None,
+                 dropout: float = 0.,
+                 activation_fn: object = None,
                  **kwargs):
         super().__init__()
-        self.output_size = output_size
 
-        self.rnn = StaticGraphLSTM(input_size, hidden_size, num_layers=1, num_nodes=21)
-        self.initial_hidden1 = StaticGraphLinear(input_size, hidden_size, num_nodes=21)
-        self.initial_hidden2 = StaticGraphLinear(input_size, hidden_size, num_nodes=21)
+        self.activation_fn = torch.nn.LeakyReLU()
+        self.num_layers = enc_num_layers
 
-        encoder_layers = TransformerLayer(d_model=output_size, nhead=4, dropout=0.1, kdim=output_size+4)
-        self.transformer_encoder = TransformerEncoderML(encoder_layers, 3)
-        self.fc = Linear(in_features=hidden_size, out_features=output_size)
+        self.rnn = StaticGraphLSTM(input_size, hidden_size//2, num_layers=self.num_layers, num_nodes=num_nodes, dropout=0., node_types=T, bias=False)
+
+        self.fc = StaticGraphLinear(hidden_size, output_size, num_nodes=num_nodes, node_types=T, bias=False)
+
+        self.initial_hidden1 = StaticGraphLinear(input_size, hidden_size//2, num_nodes=num_nodes, node_types=T, bias=False)
+        self.initial_hidden2 = StaticGraphLinear(input_size, hidden_size//2, num_nodes=num_nodes, node_types=T, bias=False)
+
         self.dropout = Dropout(0.0)
 
-        self.pe = PositionalEncoding(4)
+        self.pe = PositionalEncoding(4, dropout=0.)
 
-    def forward(self, x, state=None):
+        self.ln = torch.nn.LayerNorm(output_size, elementwise_affine=False)
+
+        encoder_layers = TransformerLayer(d_model=20*hidden_size//2, nhead=4, dropout=0.0, kdim=20*hidden_size//2+4)
+        self.transformer_encoder = TransformerEncoderML(encoder_layers, 1)
+
+    def forward(self, x: torch.Tensor, state: torch.Tensor = None):
         bs, ts, ns, fs = x.shape
-        if state is None:
-            rnn_h1 = self.initial_hidden1(x[:, 0])
-            rnn_h2 = self.initial_hidden2(x[:, 0])
-            state = [(rnn_h1, rnn_h2, None)]
-        # Initialize hidden state of rnn
-        y, state = self.rnn(x, state)
 
-        value = self.fc(y).permute(1, 0, 2, 3).reshape(ts, -1, self.output_size)
+        vn = ts - 20 + 1
+        vl = 20
+
+        idx = torch.arange(vl).unsqueeze(0) + torch.arange(vn).unsqueeze(1)
+
+        parts = x[:, idx].view(-1, vl, ns, fs)
+
+        # Initialize hidden state of rnn
+        if state is None:
+            rnn_h1 = self.initial_hidden1(parts[:, 0])
+            rnn_h2 = self.initial_hidden2(parts[:, 0])
+            state = [(rnn_h1, rnn_h2, None)] * self.num_layers
+
+        y, state = self.rnn(parts, state)  # [B, T, N, D]
+        y = y.view(bs, vn, vl, ns, -1)[:, :, -1]
+        #y = self.fc(y.view(-1, y.shape[-2], y.shape[-1]))
+        value = y.permute(1, 0, 2, 3).flatten(start_dim=-2)
         query = value[[-1]]
         key = self.pe(value)
 
-        output = self.transformer_encoder(query, key, value)[0].view(bs, ns, -1)
-
-        return output, state
+        h_t = self.transformer_encoder(query, key, value)[0].view(bs, ns, -1)
+        h_t = torch.cat([h_t, y[:, -1]], dim=-1)
+        h = h_t
+        #h = self.activation_fn(self.fc(self.dropout(y[:, -1])))  # [B, N, D]
+        return self.ln(h), state, self.activation_fn(h_t)

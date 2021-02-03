@@ -2,6 +2,7 @@ from typing import Tuple, Union
 
 import torch
 
+from motion.components.node_dropout import NodeDropout
 from motion.skeleton import Skeleton
 from motion.bingham import Bingham, BinghamMixtureModel
 from motion.quaternion import Quaternion
@@ -35,16 +36,20 @@ class Motion(torch.nn.Module):
 
         self.to_bingham = ToBingham(1950.)
 
+        self.node_dropout = NodeDropout(0.0)
+
         # Backbone
         self.backbone = None
 
-    def forward(self, x: torch.Tensor, xb: torch.Tensor = None, y: torch.Tensor = None) \
+    def forward(self, x: torch.Tensor, ph=1, xb: torch.Tensor = None, y: torch.Tensor = None) \
             -> Tuple[torch.distributions.Distribution, dict]:
         if not self.training:
             y = None
         yb = None
         if self.backbone is not None:
             yb = self.backbone(xb)
+
+        #x = self.node_dropout(x)
 
         # Calculate q_dot and concat it to q as input
         q_dot = Quaternion.mul_(x[:, 1:], Quaternion.conjugate_(x[:, :-1]))
@@ -54,7 +59,7 @@ class Motion(torch.nn.Module):
         q_dot_scaled = q_dot[..., 1:] / ((1+1e-1) - q_dot[..., [0]])
         x_scaled = torch.cat([x_scaled, q_dot_scaled], dim=-1).contiguous()
 
-        q, Z_raw, z, kwargs = self.core(x_scaled, x, yb, y)
+        q, Z_raw, z, kwargs = self.core(x_scaled, x, yb, y, ph)
 
         # Permute from [B, Z, T, N, D] to [B, T, N, Z, D]
         q = q.permute(0, 2, 3, 1, 4).contiguous()

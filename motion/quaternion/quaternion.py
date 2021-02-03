@@ -1,16 +1,42 @@
 import torch
+from math import pi
 
 
 class Quaternion(object):
-    def __init__(self, q):
-        if isinstance(q, Quaternion):
-            self._q = q._q
-            return
-        assert q.shape[-1] == 4, 'Quaternion has to be of dimension 4'
-        self._q = q
+    def __init__(self, *args, **kwargs):
+        s = len(args)
+        if s == 0:
+            if ("axis" in kwargs) or ("angle" in kwargs):
+                axis = kwargs["axis"]
+                angle = kwargs["angle"]
+                self._q = Quaternion._from_axis_angle(axis, angle).q
+        else:
+            q = args[0]
+            if Quaternion.is_quaternion(q):
+                self._q = q._q
+            else:
+                assert q.shape[-1] == 4, 'Quaternion has to be of dimension 4'
+                self._q = q
+
+    @classmethod
+    def _from_axis_angle(cls, axis, angle):
+        """Initialise from axis and angle representation
+        Create a Quaternion by specifying the 3-vector rotation axis and rotation
+        angle (in radians) from which the quaternion's rotation should be created.
+        Params:
+            axis: a valid numpy 3-vector
+            angle: a real valued angle in radians
+        """
+        norm = torch.norm(axis, dim=-1).unsqueeze(-1)
+        axis = torch.nn.functional.normalize(axis, dim=-1)
+        theta = angle.unsqueeze(-1) / 2.0
+        r = torch.where(norm > 1e-12,  torch.cos(theta), torch.ones_like(theta))
+        i = torch.where(norm > 1e-12, axis * torch.sin(theta), torch.zeros_like(axis))
+        q = torch.cat([r, i], dim=-1)
+        return cls(q)
 
     def __mul__(self, other):
-        if isinstance(other, Quaternion):
+        if Quaternion.is_quaternion(other):
             return self.__class__(torch.matmul(self._q_matrix(), other._q.unsqueeze(-1)).squeeze(-1))
         return self * self.__class__(other)
 
@@ -72,7 +98,7 @@ class Quaternion(object):
             ValueError: if `vector` cannot be interpreted as a 3-vector or a Quaternion object.
 
         """
-        if isinstance(vector, Quaternion):
+        if Quaternion.is_quaternion(vector):
             return self._rotate_quaternion(vector)
         q = Quaternion(torch.cat([torch.zeros_like(vector[..., [0]]), vector], dim=-1))
         a = self._rotate_quaternion(q).vector
@@ -199,3 +225,61 @@ class Quaternion(object):
             raise
 
         return torch.stack((x, y, z), dim=1).view(original_shape)
+
+    def get_axis(self):
+        """Get the axis or vector about which the quaternion rotation occurs
+        For a null rotation (a purely real quaternion), the rotation angle will
+        always be `0`, but the rotation axis is undefined.
+        It is by default assumed to be `[0, 0, 0]`.
+        Params:
+            undefined: [optional] specify the axis vector that should define a null rotation.
+                This is geometrically meaningless, and could be any of an infinite set of vectors,
+                but can be specified if the default (`[0, 0, 0]`) causes undesired behaviour.
+        Returns:
+            A Numpy unit 3-vector describing the Quaternion object's axis of rotation.
+        Note:
+            This feature only makes sense when referring to a unit quaternion.
+            Calling this method will implicitly normalise the Quaternion object to a unit quaternion if it is not already one.
+        """
+        tolerance = 1e-17
+        self._normalize()
+        norm = torch.norm(self.vector, dim=-1).unsqueeze(-1)
+        return torch.where(norm > tolerance, self.vector / norm, torch.zeros_like(self.vector))
+
+    @property
+    def axis(self):
+        return self.get_axis()
+
+    def _wrap_angle(self, theta):
+        """Helper method: Wrap any angle to lie between -pi and pi
+        Odd multiples of pi are wrapped to +pi (as opposed to -pi)
+        """
+        return torch.remainder(theta + pi, 2 * pi) - pi
+
+    @property
+    def angle(self):
+        """Get the angle (in radians) describing the magnitude of the quaternion rotation about its rotation axis.
+        This is guaranteed to be within the range (-pi:pi) with the direction of
+        rotation indicated by the sign.
+        When a particular rotation describes a 180 degree rotation about an arbitrary
+        axis vector `v`, the conversion to axis / angle representation may jump
+        discontinuously between all permutations of `(-pi, pi)` and `(-v, v)`,
+        each being geometrically equivalent (see Note in documentation).
+        Returns:
+            A real number in the range (-pi:pi) describing the angle of rotation
+                in radians about a Quaternion object's axis of rotation.
+        Note:
+            This feature only makes sense when referring to a unit quaternion.
+            Calling this method will implicitly normalise the Quaternion object to a unit quaternion if it is not already one.
+        """
+        self._normalize()
+        norm = torch.norm(self.vector, dim=-1)
+        return self._wrap_angle(2.0 * torch.atan2(norm, self.scalar))
+
+    @property
+    def axis_angle(self):
+        return self.angle.unsqueeze(-1) * self.axis
+
+    @staticmethod
+    def is_quaternion(other):
+        return 'Quaternion' in other.__class__.__name__

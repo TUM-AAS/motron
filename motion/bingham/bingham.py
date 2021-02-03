@@ -3,7 +3,7 @@ from functools import cached_property
 import numpy as np
 import torch
 
-from .lookup_table import LookupTable
+from motion.bingham.lookup_table import LookupTable
 
 
 class Normalized(torch.distributions.constraints.Constraint):
@@ -84,56 +84,6 @@ class Bingham(torch.distributions.Distribution):
 
         return F0 + y0 * (F1 - F0)
 
-    def xi2CGFDeriv(self, t, dim, la, derriv):
-        """
-        First four derivatives of the cumulant generating function.
-        :param dim:
-        :param la:
-        :param derriv:
-        :return:
-        """
-        res = torch.zeros_like(la)
-        for i in range(dim):
-            if i == derriv:
-                scale = 3.0
-            else:
-                scale = 1.0
-
-            res[..., 0] += scale * 0.5/(la[i]-t)
-            res[..., 1] += scale * 0.5/( (la[i]-t)*(la[i]-t))
-            res[..., 2] += scale * 1/( (la[i]-t)*(la[i]-t)*(la[i]-t) )
-            res[..., 3] += scale * 3/( (la[i]-t)*(la[i]-t)*(la[i]-t)*(la[i]-t) )
-
-        return res
-
-    # @property
-    # def F_saddle(self):
-    #     minEl = self.Z[..., 0]
-    #     Z = self.Z - (minEl - 0.1)
-    #     scaleFactor = torch.exp(-minEl + 0.1)
-    #     minEl = 0.1
-    #
-    #     la = (double *)
-    #     malloc(dim * sizeof(double));
-    #     memcpy(la, z, dim * sizeof(double));
-    #
-    #     t = findRootNewton(dim, la, minEl);
-    #
-    #     xi2CGFDeriv(t, dim, la, hK, -1);
-    #
-    #     // T = 1 / 8 rho4 - 5 / 24 rho3 ^ 2
-    #     T=1.0 / 8 * (hK[3] / (hK[1] * hK[1])) - 5.0 / 24 * (hK[2] * hK[2] / (hK[1] * hK[1] * hK[1]) );
-    #
-    #     result[0] = sqrt(2 * pow(M_PI, dim-1)) * exp(-t) / sqrt(hK[1]) * scaleFactor;
-    #
-    #     for (i=0; i < dim; i++) {
-    #     result[0] /= sqrt(la[i]-t);
-    #     }
-    #     result[1] = result[0] * (1+T);
-    #     result[2] = result[0] * exp(T);
-    #
-    #     }
-
     @cached_property
     def C(self):
         return self.M.transpose(-2, -1) @ torch.diag_embed(self.Z) @ self.M
@@ -153,16 +103,17 @@ class Bingham(torch.distributions.Distribution):
         :param sample_shape:
         :return:
         """
+        bs = self.Z.shape[:-1]
         n = int(np.prod(list(sample_shape)))
         d = self.event_shape[-1]
 
-        x = self.mode
+        x = self.mean
         z = torch.sqrt(-1. / (self.Z - 1))
 
         target = self.log_prob(x)  # target
         proposal = AngularCentralGaussian(self.M, z).log_prob(x)  # proposal
 
-        x2 = (torch.randn((n * sample_rate + burn_in, d)) * z) @ self.M  # sample Gaussian
+        x2 = ((torch.randn((n * sample_rate + burn_in,) + bs + (d,)) * z).unsqueeze(-2) @ self.M).squeeze(-2)  # sample Gaussian
         x2 = x2 / x2.norm(dim=-1, keepdim=True)  # normalize
 
         targets = self.log_prob(x2)
@@ -171,15 +122,15 @@ class Bingham(torch.distributions.Distribution):
 
         # Random walk
         for i in range(n * sample_rate + burn_in):
-            acceptance = torch.exp(targets[..., i] - target + proposal - proposals[..., i])  # log space
+            acceptance = torch.exp(targets[i] - target + proposal - proposals[i])  # log space
             mask = (acceptance > torch.rand_like(acceptance)).type_as(acceptance)
-            x = mask * x2[..., i, :] + (1 - mask) * x
-            proposal = mask * proposals[..., i] + (1 - mask) * proposal
-            target = mask * targets[..., i] + (1 - mask) * target
+            x = mask.unsqueeze(-1) * x2[i] + (1 - mask.unsqueeze(-1)) * x
+            proposal = mask * proposals[i] + (1 - mask) * proposal
+            target = mask * targets[i] + (1 - mask) * target
             states.append(x)
 
-        sampled_states = torch.stack(states, dim=1)[..., burn_in + 1::sample_rate, :]
-        return sampled_states.view(sampled_states.shape[:-2] + sample_shape + sampled_states.shape[-1:])
+        sampled_states = torch.stack(states, dim=0)[burn_in + 1::sample_rate]
+        return sampled_states.view(sample_shape + sampled_states.shape[1:])
 
     def __mul__(self, other):
         C = self.C + other.C  # new exponent
@@ -208,42 +159,58 @@ class Bingham(torch.distributions.Distribution):
         return cls(M, Z)
 
 
-def qmul(q: torch.Tensor, r: torch.Tensor) -> torch.Tensor:
-    """
-    Multiply quaternion(s) q with quaternion(s) r.
-    Expects two equally-sized tensors of shape (*, 4), where * denotes any number of dimensions.
-    Returns q*r as a tensor of shape (*, 4).
-    """
-    assert q.shape[-1] == 4
-    assert r.shape[-1] == 4
+class AngularCentralGaussian(torch.distributions.Distribution):
+    def __init__(self, M: torch.Tensor, Z: torch.Tensor):
+        batch_shape, event_shape = M.shape[:-2], M.shape[-1:]
+        dim = event_shape[-1]
+        # Check Dimensions
+        assert M.shape[-1] * M.shape[-2] == dim ** 2, 'M is not square'
+        assert Z.shape[-1] == dim, 'Z has wrong number of rows'
 
-    original_shape = q.shape
+        # enforce that M is orthogonal
+        assert ((M @ M.transpose(-2, -1) - torch.eye(dim, device=M.device)) < 1e-4).all(), 'M is not orthogonal'
 
-    # Compute outer product
-    terms = torch.bmm(r.view(-1, 4, 1), q.view(-1, 1, 4))
+        self.M = M
+        self.Z = Z
+        super().__init__(batch_shape=batch_shape, event_shape=event_shape)
 
-    w = terms[:, 0, 0] - terms[:, 1, 1] - terms[:, 2, 2] - terms[:, 3, 3]
-    x = terms[:, 0, 1] + terms[:, 1, 0] - terms[:, 2, 3] + terms[:, 3, 2]
-    y = terms[:, 0, 2] + terms[:, 1, 3] + terms[:, 2, 0] - terms[:, 3, 1]
-    z = terms[:, 0, 3] - terms[:, 1, 2] + terms[:, 2, 1] + terms[:, 3, 0]
-    return torch.stack((w, x, y, z), dim=1).view(original_shape)
+    def log_prob(self, value):
+        d = self.event_shape[-1]
+        S_inv = self.M.transpose(-2, -1) @ torch.diag_embed(1. / (torch.square(self.Z))) @ self.M
+        P = 1 / (torch.prod(self.Z, dim=-1) * self.unit_sphere_surface)
+        md = torch.sum((value.unsqueeze(-2) @ S_inv) * value.unsqueeze(-2), dim=-1).squeeze(-1)  # mahalanobis distance
+        P = P * torch.pow(md, -d / 2)
+        return torch.log(P)
 
-# q = torch.tensor([[[1. , 2., 3. , 4.]]])
-# q = q / q.norm()
+    @property
+    def unit_sphere_surface(self):
+        dim = self.event_shape[-1]
+        if dim == 2:
+            return 2 * np.pi
+        elif dim == 3:
+            return 4 * np.pi
+        elif dim == 4:
+            return 2 * np.pi ** 2
+        else:
+            raise NotImplementedError
+
+
+# from motion.components.to_bingham import ToBingham
 #
-# M = M_uns = torch.stack([
-#             qmul(q, torch.tensor([0., 0, 0, 1.]).expand([1, 1] + [4])),
-#             qmul(q, torch.tensor([0, 1., 0, 0]).expand([1, 1] + [4])),
-#             qmul(q, torch.tensor([0, 0, 1., 0]).expand([1, 1] + [4])),
-#             qmul(q, torch.tensor([1, 0, 0, 0.]).expand([1, 1] + [4])),
-#         ], dim=-2)
+# q = torch.rand((1, 4))
+# #q[..., 0] = 1.
+# q = torch.nn.functional.normalize(q, dim=-1)
+# #print(q[0])
+# Z = torch.ones((1, 3)) * 500
 #
-# Z = torch.tensor([[[-900., -900, -900, 0]]])
+#
+# M, Z = ToBingham(1999)(q, Z)
 #
 # b = Bingham(M, Z)
 #
-# print(b.log_prob(qmul(q, torch.tensor([1., 0, 0.0, 0.]))))
+# a = b.log_prob(q)
 #
-# q2 = torch.tensor([[[1. , 2., 3. , 4.01]]])
-# q2 = q2 / q.norm()
-# print(b.log_prob(q2))
+# print(a)
+# c = q.clone()
+# c[..., 1:] = - c[..., 1:]
+# print(b.log_prob(c))

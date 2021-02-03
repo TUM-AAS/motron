@@ -7,6 +7,9 @@ from torch.distributions import MixtureSameFamily
 from motion.components.structural import StaticGraphLinear
 from motion.core.mgs2s.decoder import Decoder
 from motion.core.mgs2s.encoder import Encoder
+from motion.core.mgs2s.fc_decoder import FCDecoder
+from motion.core.mgs2s.gru_encoder import GRUEncoder
+from motion.core.mgs2s.transformer_encoder import MyTransformerEncoder
 from motion.utils.torch import mutual_inf_px
 
 
@@ -29,7 +32,6 @@ class MGS2S(nn.Module):
 
         self._num_nodes = num_nodes
         self._latent_size = latent_size
-        self._prediction_horizon = prediction_horizon
 
         self.encoder = Encoder(num_nodes=num_nodes,
                                input_size=input_size,
@@ -43,6 +45,7 @@ class MGS2S(nn.Module):
                                           latent_size,
                                           bias=False,
                                           learn_influence=True,
+                                          graph_influence = G,
                                           num_nodes=num_nodes,
                                           node_types=T)
 
@@ -52,7 +55,7 @@ class MGS2S(nn.Module):
                                hidden_size=decoder_hidden_size,
                                latent_size=latent_size,
                                output_size=output_size,
-                               prediction_horizon=prediction_horizon,
+                                 prediction_horizon=prediction_horizon,
                                G=G,
                                T=T,
                                param_groups=self.param_groups,
@@ -60,7 +63,7 @@ class MGS2S(nn.Module):
 
         self.z_dropout = nn.Dropout(0.1)
 
-    def forward(self, x: torch.Tensor, x_org, b: torch.tensor = None, y: torch.Tensor = None):
+    def forward(self, x: torch.Tensor, x_org, b: torch.tensor = None, y: torch.Tensor = None, ph=1):
         bs = x.shape[0]
 
         # Encode History
@@ -68,13 +71,13 @@ class MGS2S(nn.Module):
 
         # Same z for all nodes and all timesteps
         z_logits = self.z_dropout(self.enc_to_z(h_f)).unsqueeze(1)  # [B, 1, N Z]
-        z_logits = z_logits.repeat(1, self._prediction_horizon, 1, 1)  # [B, T, N, Z]
+        z_logits = z_logits.repeat(1, ph, 1, 1)  # [B, T, N, Z]
         p_z = torch.distributions.Categorical(logits=z_logits)
 
         # Sample all z
         z_mask = torch.eye(self._latent_size, device=x.device)
         z_mask = z_mask.repeat(bs, 1).unsqueeze(-2).repeat_interleave(repeats=h.shape[-2], dim=-2)  # [B * Z, N, Z]
-        z = z_mask #p_z.probs[:, 0].repeat_interleave(repeats=self._latent_size, dim=0) * z_mask
+        z = z_mask #- 0.5 #p_z.probs[:, 0].repeat_interleave(repeats=self._latent_size, dim=0) * z_mask
 
         # Repeat hidden for each |z|
         h = h.repeat_interleave(repeats=self._latent_size, dim=0)  # [B * Z, N, D]
@@ -89,7 +92,7 @@ class MGS2S(nn.Module):
             y = y.repeat_interleave(repeats=self._latent_size, dim=0)  # [B * Z, T, N, D]
 
         # Decode future q
-        q, Z = self.decoder(x_tiled, h, z, x_org_tiled, y)  # [B * Z, T, N, D]
+        q, Z = self.decoder(x_tiled, h, z, x_org_tiled, y, ph)  # [B * Z, T, N, D]
 
         # Reshape
         q = q.view((bs, -1) + q.shape[1:])  # [B, Z, T, N, D]
@@ -101,4 +104,4 @@ class MGS2S(nn.Module):
         ll = y_pred.log_prob(y).sum(dim=1).mean()
         mi = mutual_inf_px(y_pred.mixture_distribution)
         max_i = y_pred.mixture_distribution.probs.amax(dim=[0, 1]).amin(dim=-1).mean()
-        return -ll - mi #- max_i
+        return -ll - 1 * mi# - max_i
