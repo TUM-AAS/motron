@@ -16,8 +16,12 @@ class GraphLinear(Module):
 
     def reset_parameters(self) -> None:
         init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        #if len(self.weight.shape) == 3:
-        #    self.weight.data[1:] = self.weight.data[0]
+        #stdv = 1. / math.sqrt(self.weight.size(1))
+        #self.weight.data.uniform_(-stdv, stdv)
+        #if self.learn_influence:
+        #    self.G.data.uniform_(-stdv, stdv)
+        if len(self.weight.shape) == 3:
+            self.weight.data[1:] = self.weight.data[0]
         if self.bias is not None:
             fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
             bound = 1 / math.sqrt(fan_in)

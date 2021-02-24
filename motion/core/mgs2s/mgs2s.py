@@ -8,7 +8,6 @@ from motion.components.structural import StaticGraphLinear
 from motion.core.mgs2s.decoder import Decoder
 from motion.core.mgs2s.encoder import Encoder
 from motion.core.mgs2s.fc_decoder import FCDecoder
-from motion.core.mgs2s.gru_encoder import GRUEncoder
 from motion.core.mgs2s.transformer_encoder import MyTransformerEncoder
 from motion.utils.torch import mutual_inf_px
 
@@ -22,7 +21,6 @@ class MGS2S(nn.Module):
                  decoder_hidden_size: int,
                  output_size: int,
                  latent_size: int,
-                 prediction_horizon: int,
                  G: Union[torch.Tensor, torch.nn.Parameter] = None,
                  T: torch.Tensor = None,
                  param_groups=None,
@@ -55,15 +53,14 @@ class MGS2S(nn.Module):
                                hidden_size=decoder_hidden_size,
                                latent_size=latent_size,
                                output_size=output_size,
-                                 prediction_horizon=prediction_horizon,
                                G=G,
                                T=T,
                                param_groups=self.param_groups,
                                **kwargs)
 
-        self.z_dropout = nn.Dropout(0.1)
+        self.z_dropout = nn.Dropout(0.)
 
-    def forward(self, x: torch.Tensor, x_org, b: torch.tensor = None, y: torch.Tensor = None, ph=1):
+    def forward(self, x: torch.Tensor, q: torch.Tensor, y: torch.Tensor = None, ph=1):
         bs = x.shape[0]
 
         # Encode History
@@ -85,23 +82,26 @@ class MGS2S(nn.Module):
         # Repeat last two D for each |z|
         x_tiled = x[:, -2:].repeat_interleave(repeats=self._latent_size, dim=0)  # [B * Z, N, D]
 
-        x_org_tiled = x_org[:, -1].repeat_interleave(repeats=self._latent_size, dim=0)
+        q_t_tiled = q[:, -1].repeat_interleave(repeats=self._latent_size, dim=0)
 
         # Repeat y for each |z|
         if y is not None:
             y = y.repeat_interleave(repeats=self._latent_size, dim=0)  # [B * Z, T, N, D]
 
         # Decode future q
-        q, Z = self.decoder(x_tiled, h, z, x_org_tiled, y, ph)  # [B * Z, T, N, D]
+        q, Z, kwargs = self.decoder(x_tiled, h, z, q_t_tiled, y, ph)  # [B * Z, T, N, D]
 
         # Reshape
         q = q.view((bs, -1) + q.shape[1:])  # [B, Z, T, N, D]
         Z = Z.view((bs, -1) + Z.shape[1:])  # [B, Z, T, N, D]
 
-        return q, Z, p_z, {}
+        return q, Z, p_z, {**kwargs}
+
+    def nll(self, y_pred: MixtureSameFamily, y: torch.Tensor) -> torch.Tensor:
+        ll = y_pred.log_prob(y).sum(dim=1).mean()
+        return -ll
 
     def loss(self, y_pred: MixtureSameFamily, y: torch.Tensor) -> torch.Tensor:
-        ll = y_pred.log_prob(y).sum(dim=1).mean()
+        nll = self.nll(y_pred, y)
         mi = mutual_inf_px(y_pred.mixture_distribution)
-        max_i = y_pred.mixture_distribution.probs.amax(dim=[0, 1]).amin(dim=-1).mean()
-        return -ll - 1 * mi# - max_i
+        return nll #- mi

@@ -1,3 +1,8 @@
+"""
+Adapted from pyquaternion
+https://github.com/KieranWynn/pyquaternion/blob/master/pyquaternion/quaternion.py
+"""
+
 import torch
 from math import pi
 
@@ -182,7 +187,7 @@ class Quaternion(object):
     def euler_angle_(cls, q, order, epsilon=0.):
         return cls(q).euler_angle(order, epsilon)
 
-    def euler_angle(self, order: str, epsilon: float = 0.):
+    def euler_angle(self, order: str = 'zyx', epsilon: float = 0.):
         """
         Convert quaternion(s) q to Euler angles.
         """
@@ -283,3 +288,23 @@ class Quaternion(object):
     @staticmethod
     def is_quaternion(other):
         return 'Quaternion' in other.__class__.__name__
+
+    @staticmethod
+    def qfix_(q: torch.Tensor) -> torch.Tensor:
+        """
+        Enforce quaternion continuity across the time dimension by selecting
+        the representation (q or -q) with minimal distance (or, equivalently, maximal dot product)
+        between two consecutive frames.
+
+        Expects a tensor of shape (L, J, 4), where L is the sequence length and J is the number of joints.
+        Returns a tensor of the same shape.
+        """
+        assert len(q.shape) == 3
+        assert q.shape[-1] == 4
+
+        result = q.clone()
+        dot_products = torch.sum(q[1:] * q[:-1], dim=2)
+        mask = dot_products < 0
+        mask = (torch.cumsum(mask, dim=0) % 2).type(torch.bool)
+        result[1:][mask] *= -1
+        return result

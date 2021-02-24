@@ -8,6 +8,8 @@ from motion.bingham import Bingham, BinghamMixtureModel
 from motion.quaternion import Quaternion
 from motion.components.to_bingham import ToBingham
 from motion.core.mgs2s.mgs2s import MGS2S
+from motion.van_mises_fisher import VonMisesFisher
+from motion.van_mises_fisher.distributions.vmf_mm import VonMisesFisherMixtureModel
 
 
 class Motion(torch.nn.Module):
@@ -27,7 +29,7 @@ class Motion(torch.nn.Module):
 
         # Core Model
         self.core = MGS2S(num_nodes=num_nodes,
-                          input_size=6,
+                          input_size=8,
                           G=G,
                           T=T,
                           param_groups=self.param_groups,
@@ -38,28 +40,21 @@ class Motion(torch.nn.Module):
 
         self.node_dropout = NodeDropout(0.0)
 
-        # Backbone
-        self.backbone = None
-
-    def forward(self, x: torch.Tensor, ph=1, xb: torch.Tensor = None, y: torch.Tensor = None) \
+    def forward(self, x: torch.Tensor, ph: int = 1, y: torch.Tensor = None) \
             -> Tuple[torch.distributions.Distribution, dict]:
         if not self.training:
             y = None
-        yb = None
-        if self.backbone is not None:
-            yb = self.backbone(xb)
-
-        #x = self.node_dropout(x)
 
         # Calculate q_dot and concat it to q as input
         q_dot = Quaternion.mul_(x[:, 1:], Quaternion.conjugate_(x[:, :-1]))
         q_dot = torch.cat([torch.zeros_like(q_dot[:, [0]]), q_dot], dim=1)
 
-        x_scaled = x[..., 1:] / ((1+1e-1) - x[..., [0]])
-        q_dot_scaled = q_dot[..., 1:] / ((1+1e-1) - q_dot[..., [0]])
-        x_scaled = torch.cat([x_scaled, q_dot_scaled], dim=-1).contiguous()
+        #x_scaled = x[..., 1:] / ((1+1e-1) - x[..., [0]])
+        #q_dot_scaled = q_dot[..., 1:] / ((1+1e-1) - q_dot[..., [0]])
+        #x_scaled = torch.cat([x_scaled, q_dot_scaled], dim=-1).contiguous()
+        x_x_dot = torch.cat([x, q_dot], dim=-1).contiguous()
 
-        q, Z_raw, z, kwargs = self.core(x_scaled, x, yb, y, ph)
+        q, Z_raw, z, kwargs = self.core(x_x_dot, x, y, ph)
 
         # Permute from [B, Z, T, N, D] to [B, T, N, Z, D]
         q = q.permute(0, 2, 3, 1, 4).contiguous()
@@ -68,6 +63,7 @@ class Motion(torch.nn.Module):
         M, Z = self.to_bingham(q, Z_raw)
 
         p_bmm = BinghamMixtureModel(z, Bingham(M, Z))
+        #p_bmm = VonMisesFisherMixtureModel(z, VonMisesFisher(q, torch.exp(Z_raw)))
 
         return p_bmm, {**kwargs}
 

@@ -18,25 +18,22 @@ class Encoder(nn.Module):
                  T: torch.Tensor = None,
                  enc_num_layers: int = 1,
                  dropout: float = 0.,
-                 activation_fn: object = None,
                  **kwargs):
         super().__init__()
 
-        self.activation_fn = get_activation_function(activation_fn)
         self.activation_fn = torch.nn.LeakyReLU()
-        self.num_layers = 1
+        self.num_layers = enc_num_layers
 
-        self.rnn = StaticGraphLSTM(input_size, hidden_size, num_layers=1, num_nodes=num_nodes, bias=False)
+        self.rnn = StaticGraphLSTM(input_size, hidden_size, num_layers=enc_num_layers, node_types=T, num_nodes=num_nodes, bias=True, clockwork=True)
 
-        self.fc = StaticGraphLinear(hidden_size, output_size, num_nodes=num_nodes, bias=False)
+        self.fc = StaticGraphLinear(hidden_size, output_size, num_nodes=num_nodes, node_types=T, bias=True)
 
-        self.initial_hidden1 = StaticGraphLinear(input_size, hidden_size, num_nodes=num_nodes, bias=False)
-        self.initial_hidden2 = StaticGraphLinear(input_size, hidden_size, num_nodes=num_nodes, bias=False)
+        self.initial_hidden1 = StaticGraphLinear(input_size, hidden_size, num_nodes=num_nodes, node_types=T, bias=True)
+        self.initial_hidden2 = StaticGraphLinear(input_size, hidden_size, num_nodes=num_nodes, node_types=T, bias=True)
 
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, state: torch.Tensor = None) -> Tuple[torch.Tensor, GraphLSTMState]:
-        #x = self.node_dropout(x)
         # Initialize hidden state of rnn
         if state is None:
             rnn_h1 = self.initial_hidden1(x[:, 0])

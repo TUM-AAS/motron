@@ -8,7 +8,6 @@ import math
 
 from torch.nn.modules.transformer import _get_activation_fn, _get_clones
 
-from motion.components.graph_linear import NodeLinear
 from motion.components.structural import StaticGraphLSTM, StaticGraphLinear
 
 
@@ -152,9 +151,9 @@ class MyTransformerEncoder(Module):
 
         self.pe = PositionalEncoding(4, dropout=0.)
 
-        self.ln = torch.nn.LayerNorm(output_size, elementwise_affine=False)
+        #self.ln = torch.nn.LayerNorm(output_size, elementwise_affine=False)
 
-        encoder_layers = TransformerLayer(d_model=20*hidden_size//2, nhead=4, dropout=0.0, kdim=20*hidden_size//2+4)
+        encoder_layers = TransformerLayer(d_model=21*hidden_size//2, nhead=1, dropout=0.0, kdim=21*hidden_size//2+4)
         self.transformer_encoder = TransformerEncoderML(encoder_layers, 1)
 
     def forward(self, x: torch.Tensor, state: torch.Tensor = None):
@@ -182,6 +181,5 @@ class MyTransformerEncoder(Module):
 
         h_t = self.transformer_encoder(query, key, value)[0].view(bs, ns, -1)
         h_t = torch.cat([h_t, y[:, -1]], dim=-1)
-        h = h_t
-        #h = self.activation_fn(self.fc(self.dropout(y[:, -1])))  # [B, N, D]
-        return self.ln(h), state, self.activation_fn(h_t)
+        h = self.activation_fn(self.fc(h_t))  # [B, N, D]
+        return h, state, self.activation_fn(h_t)

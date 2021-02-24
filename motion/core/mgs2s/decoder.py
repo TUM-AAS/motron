@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 
 from motion.bingham import Bingham
+from motion.components.to_bingham import ToBingham
 from motion.quaternion import Quaternion
 
 from motion.components.structural import StaticGraphLinear, StaticGraphLSTM
@@ -21,14 +22,12 @@ class Decoder(nn.Module):
                  G: Union[torch.Tensor, torch.nn.Parameter] = None,
                  T: torch.Tensor = None,
                  dec_num_layers: int = 1,
-                 activation_fn: object = None,
                  dropout: float = 0.,
                  param_groups=None,
                  **kwargs):
         super().__init__()
         self.param_groups = param_groups
-        self.activation_fn = get_activation_function(activation_fn)
-        self.activation_fn = torch.tanh#torch.nn.LeakyReLU()
+        self.activation_fn = torch.tanh
         self.num_layers = dec_num_layers
 
         self.initial_hidden_c = StaticGraphLinear(latent_size + input_size,
@@ -42,14 +41,13 @@ class Decoder(nn.Module):
                                                   num_nodes=num_nodes,
                                                   node_types=T)
 
-        self.rnn = StaticGraphLSTM(feature_size,
+        self.rnn = StaticGraphLSTM(feature_size + latent_size + input_size,
                                    hidden_size,
                                    num_nodes=num_nodes,
-                                   num_layers=self.num_layers,
+                                   num_layers=dec_num_layers,
                                    learn_influence=True,
                                    node_types=T,
-                                   dropout=0.,
-                                   recurrent_dropout=0.5,
+                                   recurrent_dropout=0.1,
                                    learn_additive_graph_influence=True)
 
         self.fc_q = StaticGraphLinear(hidden_size,
@@ -70,38 +68,36 @@ class Decoder(nn.Module):
         self.to_q = StaticGraphLinear(output_size, 3, num_nodes=num_nodes, node_types=T)
         self.to_Z = StaticGraphLinear(output_size, 3, num_nodes=num_nodes, node_types=T)
 
-        self.dropout = nn.Dropout(0.)
-        self.dropout2 = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor, h: torch.Tensor,  z: torch.Tensor, x_org, y: torch.Tensor, ph=1) \
+        #self.to_bingham = ToBingham(1950.)
+
+    def forward(self, x: torch.Tensor, h: torch.Tensor, z: torch.Tensor, q_t: torch.Tensor, y: torch.Tensor, ph: int = 1) \
             -> Tuple[torch.Tensor, torch.Tensor]:
 
         q = list()
         Z = list()
+        exp_map = list()
 
-        q_t = x_org
         x_t = x[:, -1]
         x_t_1 = x[:, -2]
         h_z = torch.cat([z, h], dim=-1)
 
         # Initialize hidden state of rnn
-        rnn_h = self.dropout2(self.initial_hidden_h(x_t_1))
-        rnn_c = self.dropout2(self.initial_hidden_c(h_z))
+        rnn_h = self.initial_hidden_h(x_t_1)
+        rnn_c = self.initial_hidden_c(h_z)
         hidden = [(rnn_h, rnn_c, None)] * self.num_layers
 
         w = torch.ones(q_t.shape[:-1] + (1,), device=q_t.device)
 
         for i in range(ph):
             # Run LSTM
-            rnn_out, hidden = self.rnn(x_t.unsqueeze(1), hidden, i)  # [B * Z, 1, N, D]
+            rnn_out, hidden = self.rnn(torch.cat([x_t, h_z], dim=-1).unsqueeze(1), hidden, i)  # [B * Z, 1, N, D]
             y_t = rnn_out.squeeze(1)  # [B * Z, N, D]
             y_t = self.dropout(self.activation_fn(y_t))
 
             y_t_q = self.fc_q(y_t)
             y_t_Z = self.fc_Z(y_t)
-
-            y_t_q = self.ln_q(y_t_q)
-            y_t_Z = self.ln_Z(y_t_Z)
 
             y_t_q = self.activation_fn(y_t_q)
             y_t_Z = torch.tanh(y_t_Z)
@@ -109,7 +105,8 @@ class Decoder(nn.Module):
             dq_t_3 = self.to_q(y_t_q)
             Z_t = self.to_Z(y_t_Z)
 
-            dq_t = Quaternion(torch.cat([w, dq_t_3], dim=-1)).normalized.q
+            exp_map.append(dq_t_3)
+            dq_t = Quaternion(angle=torch.norm(dq_t_3, dim=-1), axis=dq_t_3).q#Quaternion(torch.cat([w, dq_t_3], dim=-1)).normalized.q #
 
             q_t = Quaternion.mul_(dq_t, q_t)  # Quaternion multiplication
 
@@ -120,11 +117,16 @@ class Decoder(nn.Module):
                                         < self.param_groups[0]['teacher_forcing_factor'])
                 q_t = teacher_forcing_mask.type_as(y) * y[:, i] + (~teacher_forcing_mask).type_as(y) * q_t
 
-            q_t_scaled = q_t[..., 1:] / ((1+1e-1) - q_t[..., [0]])
-            dq_t_scaled = dq_t[..., 1:] / ((1 + 1e-1) - dq_t[..., [0]])
-            x_t = torch.cat([q_t_scaled, dq_t_scaled], dim=-1)
+            # if self.training:
+            #     M, Z_tb = self.to_bingham(q_t, Z_t)
+            #     q_t = Bingham(M, Z_tb).sample()
+
+            #q_t_scaled = q_t[..., 1:] / ((1+1e-1) - q_t[..., [0]])
+            #dq_t_scaled = dq_t[..., 1:] / ((1 + 1e-1) - dq_t[..., [0]])
+            x_t = torch.cat([q_t, dq_t], dim=-1)
 
 
         q = torch.stack(q, dim=1)
         Z = torch.stack(Z, dim=1)
-        return q, Z
+        exp_map = torch.stack(exp_map, dim=1)
+        return q, Z, {'exp_map': exp_map}

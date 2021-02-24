@@ -17,7 +17,7 @@ class FCDecoder(nn.Module):
                  hidden_size: int,
                  latent_size: int,
                  output_size: int,
-                 prediction_horizon: int,
+                 prediction_horizon: int = 25,
                  G: Union[torch.Tensor, torch.nn.Parameter] = None,
                  T: torch.Tensor = None,
                  dec_num_layers: int = 1,
@@ -33,7 +33,7 @@ class FCDecoder(nn.Module):
         self.ph = prediction_horizon
 
 
-        self.fc1 = StaticGraphLinear(latent_size + input_size,
+        self.fc1 = StaticGraphLinear(input_size,
                                                   hidden_size,
                                      graph_influence=G,
                                                   num_nodes=num_nodes,
@@ -76,20 +76,19 @@ class FCDecoder(nn.Module):
         self.to_q = StaticGraphLinear(output_size, 3 * prediction_horizon, num_nodes=num_nodes, node_types=T)
         self.to_Z = StaticGraphLinear(output_size, 3 * prediction_horizon, num_nodes=num_nodes, node_types=T)
 
-        self.dropout = nn.Dropout(0.3)
+        self.dropout = nn.Dropout(0.)
 
-    def forward(self, x: torch.Tensor, h: torch.Tensor,  z: torch.Tensor, x_org, y: torch.Tensor, ph=1) \
+    def forward(self, x: torch.Tensor, h: torch.Tensor,  z: torch.Tensor, q_t, y: torch.Tensor, ph=1) \
             -> Tuple[torch.Tensor, torch.Tensor]:
 
         q = list()
         Z = list()
 
-        q_t = x_org
-        x_t = x[:, -1]
-        x_t_1 = x[:, -2]
-        h_z = torch.cat([z, h], dim=-1)
+        #x_t = x[:, -1]
+        #x_t_1 = x[:, -2]
+        #h_z = torch.cat([z, h], dim=-1)
 
-        x_input = h_z#torch.cat([h_z], dim=-1)
+        x_input = torch.cat([h], dim=-1)
 
         y = self.fc1(x_input)
         for layer in self.layers:
@@ -102,13 +101,13 @@ class FCDecoder(nn.Module):
 
         dq_3 = self.to_q(y)
         dq_3 = dq_3.view(dq_3.shape[:-1] + (self.ph, 3)).permute(0, 2, 1, 3)
-        Z = self.to_Z(y)
-        Z = Z.view(Z.shape[:-1] + (self.ph, 3)).permute(0, 2, 1, 3)
+        # Z = self.to_Z(y)
+        # Z = Z.view(Z.shape[:-1] + (self.ph, 3)).permute(0, 2, 1, 3)
+        #
+        # w = torch.ones(dq_3.shape[:-1] + (1,), device=q_t.device)
+        #
+        # dq_t = Quaternion(angle=torch.norm(dq_3, dim=-1), axis=dq_3).q#Quaternion(torch.cat([w, dq_3], dim=-1)).normalized.q
+        #
+        # q = dq_t#Quaternion.mul_(dq_t, q_t.unsqueeze(1))  # Quaternion multiplication
 
-        w = torch.ones(dq_3.shape[:-1] + (1,), device=q_t.device)
-
-        dq_t = Quaternion(torch.cat([w, dq_3], dim=-1)).normalized.q
-
-        q = Quaternion.mul_(dq_t, q_t.unsqueeze(1))  # Quaternion multiplication
-
-        return q, Z
+        return dq_3

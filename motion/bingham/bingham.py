@@ -4,6 +4,7 @@ import numpy as np
 import torch
 
 from motion.bingham.lookup_table import LookupTable
+from motion.components.to_bingham import ToBingham
 
 
 class Normalized(torch.distributions.constraints.Constraint):
@@ -28,7 +29,7 @@ class Bingham(torch.distributions.Distribution):
         # Enforce z1<=z2<=...<=z(d-1)<=0=z(d)
         assert ((Z[..., 1:] - Z[..., :-1]) >= 0.).all(), 'values in Z have to be ascending'
 
-        assert (Z >= -2000.).all(), 'Lookup table is only calculated until 900'
+        assert (Z >= -4100.).all(), 'Lookup table is only calculated until 900'
 
         # enforce that M is orthogonal
         assert ((M @ M.transpose(-2, -1) - torch.eye(dim, device=M.device)) < 1e-4).all(), 'M is not orthogonal'
@@ -82,7 +83,9 @@ class Bingham(torch.distributions.Distribution):
         F0 = F00 + y1 * (F01 - F00)
         F1 = F10 + y1 * (F11 - F10)
 
-        return F0 + y0 * (F1 - F0)
+        F = F0 + y0 * (F1 - F0)
+
+        return F
 
     @cached_property
     def C(self):
@@ -106,20 +109,23 @@ class Bingham(torch.distributions.Distribution):
         bs = self.Z.shape[:-1]
         n = int(np.prod(list(sample_shape)))
         d = self.event_shape[-1]
-
+        device = self.Z.device
         x = self.mean
         z = torch.sqrt(-1. / (self.Z - 1))
 
         target = self.log_prob(x)  # target
         proposal = AngularCentralGaussian(self.M, z).log_prob(x)  # proposal
-
-        x2 = ((torch.randn((n * sample_rate + burn_in,) + bs + (d,)) * z).unsqueeze(-2) @ self.M).squeeze(-2)  # sample Gaussian
-        x2 = x2 / x2.norm(dim=-1, keepdim=True)  # normalize
-
+        if torch.cuda.is_available():
+            rn_s = torch.randn((n * sample_rate + burn_in,) + bs + (d,), device='cuda:0').to(x.device)
+            #rn_s = torch.cuda.FloatTensor((n * sample_rate + burn_in,) + bs + (d,)).normal_().to(x.device)
+        else:
+            rn_s = torch.randn((n * sample_rate + burn_in,) + bs + (d,), device=device)
+        x2 = ((rn_s * z).unsqueeze(-2) @ self.M).squeeze(-2)  # sample Gaussian
+        x2_n = torch.sqrt(x2.pow(2).sum(-1, keepdim=True))
+        x2 = x2 / x2_n#torch.nn.functional.normalize(x2, dim=-1)  # normalize
         targets = self.log_prob(x2)
         proposals = AngularCentralGaussian(self.M, z).log_prob(x2)
         states = []
-
         # Random walk
         for i in range(n * sample_rate + burn_in):
             acceptance = torch.exp(targets[i] - target + proposal - proposals[i])  # log space
@@ -128,7 +134,6 @@ class Bingham(torch.distributions.Distribution):
             proposal = mask * proposals[i] + (1 - mask) * proposal
             target = mask * targets[i] + (1 - mask) * target
             states.append(x)
-
         sampled_states = torch.stack(states, dim=0)[burn_in + 1::sample_rate]
         return sampled_states.view(sample_shape + sampled_states.shape[1:])
 
@@ -141,7 +146,7 @@ class Bingham(torch.distributions.Distribution):
         Z = D
         Z = Z - Z[..., -1]  # last entry should be zero
         M = V
-        return Bingham(M , Z)
+        return Bingham(M, Z)
 
     @property
     def mode(self):
@@ -182,6 +187,13 @@ class AngularCentralGaussian(torch.distributions.Distribution):
         P = P * torch.pow(md, -d / 2)
         return torch.log(P)
 
+    def sample(self, sample_shape=torch.Size()):
+        bs = self.Z.shape[:-1]
+        d = self.event_shape[-1]
+        s = ((torch.randn(bs + (d,)) * self.Z).unsqueeze(-2) @ self.M).squeeze(-2)
+        s = s / s.norm(dim=-1, keepdim=True)
+        return s
+
     @property
     def unit_sphere_surface(self):
         dim = self.event_shape[-1]
@@ -194,23 +206,13 @@ class AngularCentralGaussian(torch.distributions.Distribution):
         else:
             raise NotImplementedError
 
-
-# from motion.components.to_bingham import ToBingham
+# q = torch.tensor([1, 0.1, 0, 0.])
+# q = torch.nn.functional.normalize(q, dim=0)
+# Z = torch.tensor([900, 900, 900.])
+# M, Z = ToBingham(4100.)(q, Z)
 #
-# q = torch.rand((1, 4))
-# #q[..., 0] = 1.
-# q = torch.nn.functional.normalize(q, dim=-1)
-# #print(q[0])
-# Z = torch.ones((1, 3)) * 500
-#
-#
-# M, Z = ToBingham(1999)(q, Z)
+# #Z = torch.tensor([-9000, -9000, -900., 0.])
 #
 # b = Bingham(M, Z)
-#
-# a = b.log_prob(q)
-#
-# print(a)
-# c = q.clone()
-# c[..., 1:] = - c[..., 1:]
-# print(b.log_prob(c))
+# q = torch.tensor([1, 0, 0, 0.])
+# print(b.log_prob(q))

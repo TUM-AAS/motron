@@ -27,7 +27,7 @@ class ToBingham(torch.nn.Module):
         M = M_uns.gather(dim=-2, index=sort_idx)
         M = torch.cat([M, q.unsqueeze(-2)], dim=-2)
 
-        # Force vanisihing gradient towards the limit of the lookup table
+        # Force vanishing gradient towards the limit of the lookup table
         Z = -torch.sigmoid(Z_desc) * (self._max_Z - 1e-3) - 1e-3
         Z = torch.cat([Z, torch.zeros(Z.shape[:-1] + (1,), device=Z.device)], dim=-1)
         return M, Z
