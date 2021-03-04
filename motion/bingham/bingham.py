@@ -117,7 +117,6 @@ class Bingham(torch.distributions.Distribution):
         proposal = AngularCentralGaussian(self.M, z).log_prob(x)  # proposal
         if torch.cuda.is_available():
             rn_s = torch.randn((n * sample_rate + burn_in,) + bs + (d,), device='cuda:0').to(x.device)
-            #rn_s = torch.cuda.FloatTensor((n * sample_rate + burn_in,) + bs + (d,)).normal_().to(x.device)
         else:
             rn_s = torch.randn((n * sample_rate + burn_in,) + bs + (d,), device=device)
         x2 = ((rn_s * z).unsqueeze(-2) @ self.M).squeeze(-2)  # sample Gaussian
@@ -193,6 +192,14 @@ class AngularCentralGaussian(torch.distributions.Distribution):
         s = ((torch.randn(bs + (d,)) * self.Z).unsqueeze(-2) @ self.M).squeeze(-2)
         s = s / s.norm(dim=-1, keepdim=True)
         return s
+
+    @property
+    def mode(self):
+        return self.M[..., -1, :]
+
+    @property
+    def mean(self):
+        return self.mode
 
     @property
     def unit_sphere_surface(self):

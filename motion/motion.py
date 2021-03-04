@@ -22,6 +22,7 @@ class Motion(torch.nn.Module):
 
         self.param_groups = [{
             'teacher_forcing_factor': 0.,
+            'z_dropout': 0.,
             'kl_weight': 0.
         }]
 

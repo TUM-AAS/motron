@@ -58,7 +58,7 @@ class MGS2S(nn.Module):
                                param_groups=self.param_groups,
                                **kwargs)
 
-        self.z_dropout = nn.Dropout(0.)
+        self.z_dropout = nn.Dropout(0.1)
 
     def forward(self, x: torch.Tensor, q: torch.Tensor, y: torch.Tensor = None, ph=1):
         bs = x.shape[0]
@@ -67,7 +67,8 @@ class MGS2S(nn.Module):
         h, _, h_f = self.encoder(x)  # [B, N, D]
 
         # Same z for all nodes and all timesteps
-        z_logits = self.z_dropout(self.enc_to_z(h_f)).unsqueeze(1)  # [B, 1, N Z]
+        #z_logits = torch.dropout(self.enc_to_z(h_f), p=self.param_groups[0]['z_dropout'], train=self.training).unsqueeze(1)  # [B, 1, N Z]
+        z_logits = self.z_dropout(self.enc_to_z(h_f)).unsqueeze(1)
         z_logits = z_logits.repeat(1, ph, 1, 1)  # [B, T, N, Z]
         p_z = torch.distributions.Categorical(logits=z_logits)
 
@@ -98,7 +99,9 @@ class MGS2S(nn.Module):
         return q, Z, p_z, {**kwargs}
 
     def nll(self, y_pred: MixtureSameFamily, y: torch.Tensor) -> torch.Tensor:
-        ll = y_pred.log_prob(y).sum(dim=1).mean()
+        ll = (y_pred.log_prob(y).sum(dim=1)  # T
+              .mean(-1)  # N
+              .mean())
         return -ll
 
     def loss(self, y_pred: MixtureSameFamily, y: torch.Tensor) -> torch.Tensor:

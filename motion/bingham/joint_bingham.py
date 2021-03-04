@@ -18,11 +18,17 @@ class JointBingham(Distribution):
         dist_log_prob = self._dist.log_prob(value)
 
         chained_log_prob_list = []
-        for node_chaines in self._chaines:
-            chained_log_prob_list.append(dist_log_prob[..., node_chaines, :].sum(dim=-2))
+        assert len(self._chaines) == dist_log_prob.shape[-2]
+        for i, node_chaines in enumerate(self._chaines):
+            chained_log_prob_list.append(1.*dist_log_prob[..., i, :])#.sum(dim=-2))
 
         return torch.stack(chained_log_prob_list, dim=-2)
 
 
 class JointBinghamMixtureModel(MixtureSameFamily):
-    pass
+    def log_prob(self, x):
+        x = self._pad(x)
+        log_prob_x = 3.5*self.component_distribution.log_prob(x)  # [S, B, k]
+        log_mix_prob = torch.log_softmax(self.mixture_distribution.logits,
+                                         dim=-1)  # [B, k]
+        return torch.logsumexp(log_prob_x + log_mix_prob, dim=-1)  # [S, B]
