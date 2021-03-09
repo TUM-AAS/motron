@@ -95,7 +95,7 @@ class Bingham(torch.distributions.Distribution):
         l_p = torch.sum(value * (self.C @ value.unsqueeze(-1)).squeeze(-1), dim=-1) - torch.log(self.F)
         return l_p
 
-    def sample(self, sample_shape=torch.Size(), burn_in=5, sample_rate=10):
+    def sample(self, sample_shape=torch.Size(), burn_in=5, sample_rate=5):
         """
         Generate samples from Bingham distribution
         based on Glover's implementation in libBingham
@@ -106,35 +106,112 @@ class Bingham(torch.distributions.Distribution):
         :param sample_shape:
         :return:
         """
-        bs = self.Z.shape[:-1]
-        n = int(np.prod(list(sample_shape)))
-        d = self.event_shape[-1]
-        device = self.Z.device
-        x = self.mean
-        z = torch.sqrt(-1. / (self.Z - 1))
+        return self.sample_kent(sample_shape)
+        with torch.no_grad():
+            #return self.sample_kent(sample_shape)
+            bs = self.Z.shape[:-1]
+            n = int(np.prod(list(sample_shape)))
+            d = self.event_shape[-1]
+            device = self.Z.device
+            x = self.mean
+            #return x.unsqueeze(0).repeat(n, 1, 1, 1, 1, 1)
+            z = torch.sqrt(-1. / (self.Z - 1))
 
-        target = self.log_prob(x)  # target
-        proposal = AngularCentralGaussian(self.M, z).log_prob(x)  # proposal
-        if torch.cuda.is_available():
-            rn_s = torch.randn((n * sample_rate + burn_in,) + bs + (d,), device='cuda:0').to(x.device)
-        else:
-            rn_s = torch.randn((n * sample_rate + burn_in,) + bs + (d,), device=device)
-        x2 = ((rn_s * z).unsqueeze(-2) @ self.M).squeeze(-2)  # sample Gaussian
-        x2_n = torch.sqrt(x2.pow(2).sum(-1, keepdim=True))
-        x2 = x2 / x2_n#torch.nn.functional.normalize(x2, dim=-1)  # normalize
-        targets = self.log_prob(x2)
-        proposals = AngularCentralGaussian(self.M, z).log_prob(x2)
-        states = []
-        # Random walk
-        for i in range(n * sample_rate + burn_in):
-            acceptance = torch.exp(targets[i] - target + proposal - proposals[i])  # log space
-            mask = (acceptance > torch.rand_like(acceptance)).type_as(acceptance)
-            x = mask.unsqueeze(-1) * x2[i] + (1 - mask.unsqueeze(-1)) * x
-            proposal = mask * proposals[i] + (1 - mask) * proposal
-            target = mask * targets[i] + (1 - mask) * target
-            states.append(x)
-        sampled_states = torch.stack(states, dim=0)[burn_in + 1::sample_rate]
-        return sampled_states.view(sample_shape + sampled_states.shape[1:])
+            target = self.log_prob(x)  # target
+            proposal = AngularCentralGaussian(self.M, z).log_prob(x)  # proposal
+            if torch.cuda.is_available() and False:
+                rn_s = torch.randn((n * sample_rate + burn_in,) + bs + (d,), device='cuda:0').to(x.device)
+                #rn_s = torch.randn((n, ) + bs + (d,), device='cuda:0').to(x.device)
+            else:
+                rn_s = torch.randn((n * sample_rate + burn_in,) + bs + (d,), device=device)
+            x2 = ((rn_s * z).unsqueeze(-2) @ self.M).squeeze(-2)  # sample Gaussian
+            x2_n = torch.sqrt(x2.pow(2).sum(-1, keepdim=True))
+            x2 = x2 / x2_n#torch.nn.functional.normalize(x2, dim=-1)  # normalize
+            #return x2
+            targets = self.log_prob(x2)
+            proposals = AngularCentralGaussian(self.M, z).log_prob(x2)
+            states = []
+            # Random walk
+            n_acc = None
+            n_i = 0
+            for i in range(n * sample_rate + burn_in):
+                acceptance = torch.exp(targets[i] - target + proposal - proposals[i])  # log space
+                #acceptance = torch.exp(targets[i] - target)
+                mask = (acceptance > torch.rand_like(acceptance)).type_as(acceptance)
+                if n_acc is None:
+                    n_acc = mask
+                else:
+                    n_acc += mask
+                #n_i += mask.numel()
+                x = mask.unsqueeze(-1) * x2[i] + (1 - mask.unsqueeze(-1)) * x
+                proposal = mask * proposals[i] + (1 - mask) * proposal
+                target = mask * targets[i] + (1 - mask) * target
+                states.append(x)
+
+            sampled_states = torch.stack(states, dim=0)[burn_in + 1::sample_rate]
+            return sampled_states.view(sample_shape + sampled_states.shape[1:])
+
+    def sample_kent(self, sample_shape=torch.Size()):
+        """Generates Bingham random samples.
+
+        The random sampling uses a rejection method that was originally
+        proposed in
+        J. T. Kent, A. M. Ganeiber, K. V. Mardia, "A New Method to Simulate
+        the Bingham and Related Distributions in Directional Data Analysis
+        with Applications", arXiv preprint arXiv:1310.8110, 2013.
+
+        Parameters
+        ----------
+        n : integer
+            Number of random samples.
+
+        Returns
+        -------
+        samples : array of shape (n_points, dim)
+            Array with random samples.
+        """
+        with torch.no_grad():
+            device = self.M.device
+            n = int(np.prod(list(sample_shape)))
+            d = self.event_shape[0]
+            samples = torch.zeros((n,) + self.batch_shape + self.event_shape, device=device).view(n, -1, d)
+            sample_count = torch.zeros(self.batch_shape, dtype=torch.long, device=device).view(-1)
+
+            a = -self.C.view(-1, d, d)
+
+            b = torch.tensor(1.)
+
+            omega = torch.eye(d, device=device).view((1, d, d)) + 2. * a / b
+            mbstar = torch.exp(-(d - b) / 2.) * (d / b) ** (d / 2.)
+
+            def fb_likelihood(x, a):
+                x = x.unsqueeze(-2)
+                return torch.exp(torch.matmul(-x, torch.matmul(a, x.transpose(-1, -2)))).squeeze(-1).squeeze(-1)
+
+            def acg_likelihood(x, omega):
+                x = x.unsqueeze(-2)
+                return torch.matmul(x, torch.matmul(omega, x.transpose(-1, -2))).squeeze(-1).squeeze(-1) ** (-d / 2.)
+
+            i_omega = torch.inverse(omega)
+            i_omega_scale_tril = torch.cholesky(i_omega)
+            while (sample_count < n).any():
+                sample_mask = sample_count < n
+                i_omega_scale_tril_sample = i_omega_scale_tril[sample_mask]
+
+                mvn = torch.distributions.MultivariateNormal(loc=torch.zeros((i_omega_scale_tril_sample.shape[0],) + self.event_shape, device=device),
+                                                             scale_tril=i_omega_scale_tril_sample)
+
+                candidate = mvn.sample()
+                candidate_norm = torch.sqrt(candidate.pow(2).sum(-1, keepdim=True))
+                candidate = candidate / candidate_norm
+
+                acceptance = fb_likelihood(candidate, a[sample_mask]) / (mbstar * acg_likelihood(candidate, omega[sample_mask]))
+                w = torch.rand_like(acceptance)
+                a_mask = w < acceptance
+                samples[sample_count[sample_mask], sample_mask] = a_mask.unsqueeze(-1) * candidate + (~a_mask.unsqueeze(-1)) * samples[sample_count[sample_mask], sample_mask]
+                sample_count[sample_mask] += a_mask * 1
+
+            return samples.view(sample_shape + self.batch_shape + self.event_shape)
 
     def __mul__(self, other):
         C = self.C + other.C  # new exponent
@@ -189,7 +266,7 @@ class AngularCentralGaussian(torch.distributions.Distribution):
     def sample(self, sample_shape=torch.Size()):
         bs = self.Z.shape[:-1]
         d = self.event_shape[-1]
-        s = ((torch.randn(bs + (d,)) * self.Z).unsqueeze(-2) @ self.M).squeeze(-2)
+        s = ((torch.randn(sample_shape + bs + (d,)) * self.Z).unsqueeze(-2) @ self.M).squeeze(-2)
         s = s / s.norm(dim=-1, keepdim=True)
         return s
 
@@ -213,13 +290,12 @@ class AngularCentralGaussian(torch.distributions.Distribution):
         else:
             raise NotImplementedError
 
-# q = torch.tensor([1, 0.1, 0, 0.])
-# q = torch.nn.functional.normalize(q, dim=0)
-# Z = torch.tensor([900, 900, 900.])
-# M, Z = ToBingham(4100.)(q, Z)
-#
-# #Z = torch.tensor([-9000, -9000, -900., 0.])
+# q = torch.tensor([[1, 0, 0, 0.], [0, 0, 1, 0.]])
+# q = torch.nn.functional.normalize(q, dim=-1)
+# Z = torch.tensor([[0, 0, 0.], [0, 0, 0.]])
+# M, Z = ToBingham(1950.)(q, Z)
+# Z = torch.tensor([[-2000, -2000, -2000., -0], [-4000, -4000, -4000, 0]])
 #
 # b = Bingham(M, Z)
-# q = torch.tensor([1, 0, 0, 0.])
-# print(b.log_prob(q))
+# print(b.sample_kent((50,)).abs())
+# print(b.log_prob(q[0]))

@@ -39,7 +39,7 @@ class MGS2S(nn.Module):
                                T=T,
                                **kwargs)
 
-        self.enc_to_z = StaticGraphLinear(encoder_hidden_size,
+        self.enc_to_z = StaticGraphLinear(bottleneck_size,
                                           latent_size,
                                           bias=False,
                                           learn_influence=True,
@@ -68,8 +68,8 @@ class MGS2S(nn.Module):
 
         # Same z for all nodes and all timesteps
         #z_logits = torch.dropout(self.enc_to_z(h_f), p=self.param_groups[0]['z_dropout'], train=self.training).unsqueeze(1)  # [B, 1, N Z]
-        z_logits = self.z_dropout(self.enc_to_z(h_f)).unsqueeze(1)
-        z_logits = z_logits.repeat(1, ph, 1, 1)  # [B, T, N, Z]
+        z_logits = self.z_dropout(self.enc_to_z(h).mean(dim=-2)).unsqueeze(1).unsqueeze(1)
+        #z_logits = z_logits.repeat(1, ph, h.shape[-2], 1)  # [B, T, N, Z]
         p_z = torch.distributions.Categorical(logits=z_logits)
 
         # Sample all z

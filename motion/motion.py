@@ -2,6 +2,7 @@ from typing import Tuple, Union
 
 import torch
 
+from motion.bingham.bingham import AngularCentralGaussian
 from motion.components.node_dropout import NodeDropout
 from motion.skeleton import Skeleton
 from motion.bingham import Bingham, BinghamMixtureModel
@@ -37,7 +38,7 @@ class Motion(torch.nn.Module):
                           **kwargs
                           )
 
-        self.to_bingham = ToBingham(1950.)
+        self.to_bingham = ToBingham(4000.)
 
         self.node_dropout = NodeDropout(0.0)
 
