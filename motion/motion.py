@@ -38,7 +38,7 @@ class Motion(torch.nn.Module):
                           **kwargs
                           )
 
-        self.to_bingham = ToBingham(4000.)
+        self.to_bingham = ToBingham(1950.)
 
         self.node_dropout = NodeDropout(0.0)
 
