@@ -18,4 +18,7 @@ class NodeDropout(torch.nn.Module):
         td_mask[:, -tdi:] = 1.
         mask_final = 1 - (ind_mask * td_mask)
 
-        return x * mask_final
+        ones = torch.zeros_like(x)
+        ones[..., 0] = 1.
+
+        return mask_final * x + (1-mask_final) * ones

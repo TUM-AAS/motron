@@ -40,12 +40,14 @@ class Motion(torch.nn.Module):
 
         self.to_bingham = ToBingham(1950.)
 
-        self.node_dropout = NodeDropout(0.0)
+        #self.node_dropout = NodeDropout(0.2)
 
     def forward(self, x: torch.Tensor, ph: int = 1, y: torch.Tensor = None) \
             -> Tuple[torch.distributions.Distribution, dict]:
         if not self.training:
             y = None
+
+        #x = self.node_dropout(x)
 
         # Calculate q_dot and concat it to q as input
         q_dot = Quaternion.mul_(x[:, 1:], Quaternion.conjugate_(x[:, :-1]))
