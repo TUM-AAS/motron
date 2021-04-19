@@ -2,8 +2,12 @@ from typing import Tuple, Union
 
 import torch
 
+from motion.acg.acg import ACG
 from motion.bingham.bingham import AngularCentralGaussian
 from motion.components.node_dropout import NodeDropout
+from motion.components.to_acg import ToACG
+from motion.components.to_gaussian import ToGaussian
+from motion.gaussian.mvn import LieMultivariateNormal
 from motion.skeleton import Skeleton
 from motion.bingham import Bingham, BinghamMixtureModel
 from motion.quaternion import Quaternion
@@ -38,7 +42,7 @@ class Motion(torch.nn.Module):
                           **kwargs
                           )
 
-        self.to_bingham = ToBingham(1950.)
+        self.to_gaussian = ToGaussian()
 
         #self.node_dropout = NodeDropout(0.2)
 
@@ -64,10 +68,9 @@ class Motion(torch.nn.Module):
         q = q.permute(0, 2, 3, 1, 4).contiguous()
         Z_raw = Z_raw.permute(0, 2, 3, 1, 4).contiguous()
 
-        M, Z = self.to_bingham(q, Z_raw)
+        scale_tril = self.to_gaussian(Z_raw[..., :3], Z_raw[..., 3:])
 
-        p_bmm = BinghamMixtureModel(z, Bingham(M, Z))
-        #p_bmm = VonMisesFisherMixtureModel(z, VonMisesFisher(q, torch.exp(Z_raw)))
+        p_bmm = BinghamMixtureModel(z, LieMultivariateNormal(loc=q, scale_tril=scale_tril))
 
         return p_bmm, {**kwargs}
 

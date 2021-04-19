@@ -66,7 +66,7 @@ class Decoder(nn.Module):
         self.ln_Z = nn.LayerNorm(output_size, elementwise_affine=False)
 
         self.to_q = StaticGraphLinear(output_size, 3, num_nodes=num_nodes, node_types=T)
-        self.to_Z = StaticGraphLinear(output_size, 3, num_nodes=num_nodes, node_types=T)
+        self.to_Z = StaticGraphLinear(output_size, 6, num_nodes=num_nodes, node_types=T)
 
         self.dropout = nn.Dropout(dropout)
 
@@ -88,7 +88,7 @@ class Decoder(nn.Module):
         rnn_c = self.initial_hidden_c(h_z)
         hidden = [(rnn_h, rnn_c, None)] * self.num_layers
 
-        w = torch.ones(q_t.shape[:-1] + (1,), device=q_t.device)
+        z_t = torch.ones(q_t.shape[:-1] + (6,), device=q_t.device) * 1e-3
 
         for i in range(ph):
             # Run LSTM
@@ -102,16 +102,19 @@ class Decoder(nn.Module):
             y_t_q = self.activation_fn(y_t_q)
             y_t_Z = torch.tanh(y_t_Z)
 
+            y_t_Z = self.ln_Z(y_t_Z)
+
             dq_t_3 = self.to_q(y_t_q)
-            Z_t = self.to_Z(y_t_Z)
+            Z_t = torch.sigmoid(self.to_Z(y_t_Z))
 
             exp_map.append(dq_t_3)
             dq_t = Quaternion(angle=torch.norm(dq_t_3, dim=-1), axis=dq_t_3).q#Quaternion(torch.cat([w, dq_t_3], dim=-1)).normalized.q #
 
             q_t = Quaternion.mul_(dq_t, q_t)  # Quaternion multiplication
+            z_t = z_t + Z_t
 
             q.append(q_t)
-            Z.append(Z_t)
+            Z.append(z_t)
             if self.param_groups[0]['teacher_forcing_factor'] > 1e-6 and self.training and y is not None:
                 teacher_forcing_mask = (torch.rand(list(q_t.shape[:-2]) + [1] * 2)
                                         < self.param_groups[0]['teacher_forcing_factor'])
@@ -123,7 +126,7 @@ class Decoder(nn.Module):
 
             #q_t_scaled = q_t[..., 1:] / ((1+1e-1) - q_t[..., [0]])
             #dq_t_scaled = dq_t[..., 1:] / ((1 + 1e-1) - dq_t[..., [0]])
-            x_t = torch.cat([q_t, dq_t], dim=-1)
+            x_t = torch.cat([q_t.detach(), dq_t.detach()], dim=-1)
 
 
         q = torch.stack(q, dim=1)

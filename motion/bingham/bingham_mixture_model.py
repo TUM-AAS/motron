@@ -52,6 +52,16 @@ class BinghamMixtureModel(MixtureSameFamily):
         return torch.sum(probs * self.component_distribution.mean,
                          dim=-1 - self._event_ndims)  # [B, E]
 
+    def log_prob_max(self, x):
+        x = self._pad(x)
+        log_prob_x = self.component_distribution.log_prob(x)  # [S, B, k]
+        log_mix_prob = torch.log_softmax(self.mixture_distribution.logits,
+                                         dim=-1)  # [B, k]
+        _, idx = log_prob_x.sum(dim=1).mean(1).max(dim=-1)
+        log_prob_x_max = log_prob_x.gather(dim=-1, index=idx.view(-1, 1, 1, 1).repeat((1,) + log_prob_x.shape[1:-1] + (1,))).squeeze(-1)
+        log_mix_prob_max = log_mix_prob.gather(dim=-1, index=idx.view(-1, 1, 1, 1)).squeeze(-1)
+        return (log_prob_x_max + log_mix_prob_max)  # [S, B]
+
     def to(self, device):
         return BinghamMixtureModel(mixture_distribution=Categorical(logits=self.mixture_distribution.logits.to(device)),
                                    component_distribution=Bingham(self.component_distribution.M.to(device), self.component_distribution.Z.to(device)))

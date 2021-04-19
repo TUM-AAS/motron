@@ -58,7 +58,7 @@ class MGS2S(nn.Module):
                                param_groups=self.param_groups,
                                **kwargs)
 
-        self.z_dropout = nn.Dropout(0.1)
+        self.z_dropout = nn.Dropout(0.0)
 
     def forward(self, x: torch.Tensor, q: torch.Tensor, y: torch.Tensor = None, ph=1):
         bs = x.shape[0]
@@ -99,12 +99,24 @@ class MGS2S(nn.Module):
         return q, Z, p_z, {**kwargs}
 
     def nll(self, y_pred: MixtureSameFamily, y: torch.Tensor) -> torch.Tensor:
-        ll = (y_pred.log_prob(y).sum(dim=1)  # T
-              .mean(-1)  # N
-              .mean())
+        if self.training:
+            ll = (y_pred.log_prob(y).clamp(min=-500, max=20).sum(dim=1)  # T
+                  .mean(-1)  # N
+                  .mean())
+        else:
+            ll = (y_pred.log_prob(y).sum(dim=1)  # T
+                  .mean(-1)  # N
+                  .mean())
         return -ll
 
     def loss(self, y_pred: MixtureSameFamily, y: torch.Tensor) -> torch.Tensor:
         nll = self.nll(y_pred, y)
-        mi = mutual_inf_px(y_pred.mixture_distribution)
-        return nll #- mi
+        if self.training:
+            mi = 3.5 * mutual_inf_px(y_pred.mixture_distribution)
+        else:
+            mi = 0
+        # if self.training:
+        #     var = y_pred.component_distribution.mean.var(dim=-2).mean()
+        # else:
+        #     var = 0.
+        return nll - mi #- var #
