@@ -11,10 +11,14 @@ class Quaternion(object):
     def __init__(self, *args, **kwargs):
         s = len(args)
         if s == 0:
-            if ("axis" in kwargs) or ("angle" in kwargs):
+            if ("axis" in kwargs) and ("angle" in kwargs):
                 axis = kwargs["axis"]
                 angle = kwargs["angle"]
                 self._q = Quaternion._from_axis_angle(axis, angle).q
+            elif ("axis" in kwargs) and ("rodriguez_parameter" in kwargs):
+                axis = kwargs["axis"]
+                rodriguez_parameter = kwargs["rodriguez_parameter"]
+                self._q = Quaternion._from_rodrigues_vector(axis, rodriguez_parameter).q
         else:
             q = args[0]
             if Quaternion.is_quaternion(q):
@@ -32,10 +36,20 @@ class Quaternion(object):
             axis: a valid numpy 3-vector
             angle: a real valued angle in radians
         """
-        norm = torch.norm(axis, dim=-1).unsqueeze(-1)
-        axis = torch.nn.functional.normalize(axis, dim=-1)
+        norm = axis.square().sum(-1).sqrt().unsqueeze(-1)
+        axis = axis / norm.clamp_min(1e-12)
         theta = angle.unsqueeze(-1) / 2.0
         r = torch.where(norm > 1e-12,  torch.cos(theta), torch.ones_like(theta))
+        i = torch.where(norm > 1e-12, axis * torch.sin(theta), torch.zeros_like(axis))
+        q = torch.cat([r, i], dim=-1)
+        return cls(q)
+
+    @classmethod
+    def _from_rodrigues_vector(cls, axis, rodrigues_parameter):
+        norm = axis.square().sum(-1).sqrt().unsqueeze(-1)
+        axis = axis / norm.clamp_min(1e-12)
+        theta = torch.atan(rodrigues_parameter).unsqueeze(-1)
+        r = torch.where(norm > 1e-12, torch.cos(theta), torch.ones_like(theta))
         i = torch.where(norm > 1e-12, axis * torch.sin(theta), torch.zeros_like(axis))
         q = torch.cat([r, i], dim=-1)
         return cls(q)
@@ -79,7 +93,7 @@ class Quaternion(object):
         Returns:
             A Quaternion object representing the rotated vector in quaternion from (0 + xi + yj + kz)
         """
-        self._normalize()
+        #self._normalize()
         return self.__class__(self * q * self.conjugate)
 
     @classmethod
@@ -162,7 +176,7 @@ class Quaternion(object):
             Calling this method will implicitly normalise the Quaternion object to a unit quaternion if it is not already one.
 
         """
-        self._normalize()
+        #self._normalize()
         product_matrix = torch.matmul(self._q_matrix(), self._q_bar_matrix().conj().transpose(-2, -1))
         return product_matrix[..., 1:, 1:]
 
@@ -246,10 +260,10 @@ class Quaternion(object):
             This feature only makes sense when referring to a unit quaternion.
             Calling this method will implicitly normalise the Quaternion object to a unit quaternion if it is not already one.
         """
-        tolerance = 1e-17
-        self._normalize()
-        norm = torch.norm(self.vector, dim=-1).unsqueeze(-1)
-        return torch.where(norm > tolerance, self.vector / norm, torch.zeros_like(self.vector))
+        tolerance = 1e-12
+        #self._normalize()
+        norm = torch.norm(self.vector, dim=-1).unsqueeze(-1)#self.vector.square().sum(-1).sqrt().unsqueeze(-1)
+        return torch.where(norm > tolerance, torch.nn.functional.normalize(self.vector, dim=-1), torch.zeros_like(self.vector))
 
     @property
     def axis(self):
@@ -277,13 +291,17 @@ class Quaternion(object):
             This feature only makes sense when referring to a unit quaternion.
             Calling this method will implicitly normalise the Quaternion object to a unit quaternion if it is not already one.
         """
-        self._normalize()
+        #self._normalize()
         norm = torch.norm(self.vector, dim=-1)
         return self._wrap_angle(2.0 * torch.atan2(norm, self.scalar))
 
     @property
     def axis_angle(self):
         return self.angle.unsqueeze(-1) * self.axis
+
+    @property
+    def rodriguez_vector(self):
+        return torch.tan(self.angle.unsqueeze(-1) / 2.) * self.axis
 
     @staticmethod
     def is_quaternion(other):

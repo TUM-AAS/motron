@@ -44,6 +44,7 @@ class BinghamMixtureModel(MixtureSameFamily):
 
     @property
     def mode(self):
+        return self.mode_max
         probs = self._pad_mixture_dimensions(
             torch.nn.functional.one_hot(
                 self.mixture_distribution.probs.argmax(dim=-1), num_classes=self.mixture_distribution.probs.shape[-1]
@@ -51,6 +52,14 @@ class BinghamMixtureModel(MixtureSameFamily):
         )
         return torch.sum(probs * self.component_distribution.mean,
                          dim=-1 - self._event_ndims)  # [B, E]
+
+    @property
+    def mode_max(self):
+        lp = self.log_prob(self.component_distribution.mean.permute(3, 0, 1, 2, 4))
+        _, max_idx = lp.max(dim=0)
+        max_idx = max_idx.unsqueeze(-1).unsqueeze(-1).repeat_interleave(4, dim=-1)
+        mode = self.component_distribution.mean.gather(dim=-2, index=max_idx)
+        return mode.squeeze(-2)
 
     def log_prob_max(self, x):
         x = self._pad(x)

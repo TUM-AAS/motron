@@ -85,18 +85,20 @@ class MGS2S(nn.Module):
 
         q_t_tiled = q[:, -1].repeat_interleave(repeats=self._latent_size, dim=0)
 
+        q0 = q[:, -1].unsqueeze(-2).repeat_interleave(repeats=self._latent_size, dim=-2)
+
         # Repeat y for each |z|
         if y is not None:
             y = y.repeat_interleave(repeats=self._latent_size, dim=0)  # [B * Z, T, N, D]
 
         # Decode future q
-        q, Z, kwargs = self.decoder(x_tiled, h, z, q_t_tiled, y, ph)  # [B * Z, T, N, D]
+        q, Z = self.decoder(x_tiled, h, z, q_t_tiled, y, ph)  # [B * Z, T, N, D]
 
         # Reshape
         q = q.view((bs, -1) + q.shape[1:])  # [B, Z, T, N, D]
         Z = Z.view((bs, -1) + Z.shape[1:])  # [B, Z, T, N, D]
 
-        return q, Z, p_z, {**kwargs}
+        return q, Z, p_z, q0, {}
 
     def nll(self, y_pred: MixtureSameFamily, y: torch.Tensor) -> torch.Tensor:
         if self.training:
@@ -119,4 +121,4 @@ class MGS2S(nn.Module):
         #     var = y_pred.component_distribution.mean.var(dim=-2).mean()
         # else:
         #     var = 0.
-        return nll - mi #- var #
+        return nll #- mi #- var #

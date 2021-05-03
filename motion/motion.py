@@ -2,19 +2,13 @@ from typing import Tuple, Union
 
 import torch
 
-from motion.acg.acg import ACG
-from motion.bingham.bingham import AngularCentralGaussian
-from motion.components.node_dropout import NodeDropout
-from motion.components.to_acg import ToACG
+from motion.components.quaternion_mvn import QuaternionMultivariateNormal
+from motion.components.quaternion_mvn_time_series import QuaternionMultivariateNormalTimeSeries
 from motion.components.to_gaussian import ToGaussian
-from motion.gaussian.mvn import LieMultivariateNormal
 from motion.skeleton import Skeleton
-from motion.bingham import Bingham, BinghamMixtureModel
+from motion.bingham import BinghamMixtureModel
 from motion.quaternion import Quaternion
-from motion.components.to_bingham import ToBingham
 from motion.core.mgs2s.mgs2s import MGS2S
-from motion.van_mises_fisher import VonMisesFisher
-from motion.van_mises_fisher.distributions.vmf_mm import VonMisesFisherMixtureModel
 
 
 class Motion(torch.nn.Module):
@@ -62,15 +56,21 @@ class Motion(torch.nn.Module):
         #x_scaled = torch.cat([x_scaled, q_dot_scaled], dim=-1).contiguous()
         x_x_dot = torch.cat([x, q_dot], dim=-1).contiguous()
 
-        q, Z_raw, z, kwargs = self.core(x_x_dot, x, y, ph)
+        q, Z_raw, z, q0, kwargs = self.core(x_x_dot, x, y, ph)
 
         # Permute from [B, Z, T, N, D] to [B, T, N, Z, D]
         q = q.permute(0, 2, 3, 1, 4).contiguous()
         Z_raw = Z_raw.permute(0, 2, 3, 1, 4).contiguous()
 
-        scale_tril = self.to_gaussian(Z_raw[..., :3], Z_raw[..., 3:])
+        # p_bmm = BinghamMixtureModel(z, LieMultivariateNormal(loc=q, scale_tril=scale_tril))
 
-        p_bmm = BinghamMixtureModel(z, LieMultivariateNormal(loc=q, scale_tril=scale_tril))
+        log_std, correlation = Z_raw.split(3, dim=-1)
+
+        p_dq = QuaternionMultivariateNormal(qloc=q, std=torch.exp(log_std), correlation=0.99*torch.tanh(correlation))
+
+        q0 = QuaternionMultivariateNormal(qloc=q0, std=1e-2 * torch.ones_like(log_std[:, 0]),
+                                          correlation=torch.zeros_like(correlation[:, 0]))
+        p_bmm = BinghamMixtureModel(z, QuaternionMultivariateNormalTimeSeries(q0=q0, dq=p_dq))
 
         return p_bmm, {**kwargs}
 

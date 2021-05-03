@@ -5,14 +5,22 @@ from motion.quaternion import Quaternion
 
 
 class QuaternionMultivariateNormal(MultivariateNormal):
-    def __init__(self, qloc, std, correlation):
+    def __init__(self, qloc, std=None, correlation=None, scale_tril=None, fix_rho23=True):
         self.qloc = Quaternion(qloc)
-        super().__init__(loc=torch.zeros_like(qloc[..., :3]), std=std, correlation=correlation)
+        super().__init__(loc=torch.zeros_like(qloc[..., :3]), std=std, correlation=correlation,
+                         scale_tril=scale_tril, fix_rho23=fix_rho23)
+
+    def __getitem__(self, item):
+        return self.__class__(qloc=self.qloc.q[item],
+                              std=self.std[item],
+                              correlation=self.correlation[item],
+                              scale_tril=self.scale_tril[item])
 
     def log_prob(self, value):
         qv = Quaternion(value)
         dist = (qv * self.qloc.conjugate).axis_angle
-        return super().log_prob(dist)
+        lp = super().log_prob(dist)
+        return lp
 
     def rsample(self, sample_shape=torch.Size()):
         s = super().rsample(sample_shape)
@@ -37,4 +45,4 @@ class QuaternionMultivariateNormal(MultivariateNormal):
         tril_indices = torch.tril_indices(row=3, col=3, offset=-1)
         correlation = cov[..., tril_indices[0], tril_indices[1]] / std_combinations_prod
 
-        return self.__class__(qloc=qloc, std=std, correlation=correlation)
+        return self.__class__(qloc=qloc.q, std=std, correlation=correlation, fix_rho23=False)

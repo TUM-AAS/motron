@@ -18,3 +18,7 @@ class LieMultivariateNormal(torch.distributions.MultivariateNormal):
     @property
     def mean(self):
         return self.loc_
+
+    @property
+    def mean2(self):
+        return self.loc_

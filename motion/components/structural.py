@@ -27,7 +27,7 @@ class GraphLinear(Module):
             bound = 1 / math.sqrt(fan_in)
             init.uniform_(self.bias, -bound, bound)
 
-    def forward(self, input: torch.Tensor, g: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, input: torch.Tensor, g: Optional[torch.Tensor] = None) -> torch.Tensor:
         if g is None and self.learn_influence:
             g = torch.nn.functional.normalize(self.G, p=1., dim=1)
             #g = torch.softmax(self.G, dim=1)
@@ -324,6 +324,7 @@ def StaticGraphLSTM(*args, **kwargs):
     return torch.jit.script(StaticGraphLSTM_(*args, **kwargs))
 
 GraphGRUState = Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]
+
 
 class StaticGraphGRUCell_(Module):
     def __init__(self, input_size: int, hidden_size: int, num_nodes: int = None, dropout: float = 0.,
