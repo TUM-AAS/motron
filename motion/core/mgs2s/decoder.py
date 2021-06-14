@@ -2,14 +2,9 @@ from typing import Tuple, Union
 
 import torch
 import torch.nn as nn
-
-from motion.bingham import Bingham
-from motion.components.quaternion_mvn import QuaternionMultivariateNormal
-from motion.components.to_bingham import ToBingham
 from motion.quaternion import Quaternion
 
-from motion.components.structural import StaticGraphLinear, StaticGraphLSTM, StaticGraphGRU
-from motion.utils.torch import get_activation_function
+from motion.components.structural import StaticGraphLinear, StaticGraphGRU
 
 
 class Decoder(nn.Module):
@@ -20,6 +15,7 @@ class Decoder(nn.Module):
                  hidden_size: int,
                  latent_size: int,
                  output_size: int,
+                 position: bool,
                  G: Union[torch.Tensor, torch.nn.Parameter] = None,
                  T: torch.Tensor = None,
                  dec_num_layers: int = 1,
@@ -27,6 +23,8 @@ class Decoder(nn.Module):
                  param_groups=None,
                  **kwargs):
         super().__init__()
+        self.position = position
+
         self.param_groups = param_groups
         self.activation_fn = torch.tanh
         self.num_layers = dec_num_layers
@@ -37,19 +35,20 @@ class Decoder(nn.Module):
                                                   learn_influence=True,
                                                   node_types=T)
 
-        self.initial_hidden_h = StaticGraphLinear(feature_size,
-                                                  hidden_size,
-                                                  num_nodes=num_nodes,
-                                                  node_types=T)
+        # self.initial_hidden_h = StaticGraphLinear(feature_size,
+        #                                           hidden_size,
+        #                                           num_nodes=num_nodes,
+        #                                           node_types=T)
 
         self.rnn = StaticGraphGRU(feature_size + latent_size + input_size,
-                                   hidden_size,
-                                   num_nodes=num_nodes,
-                                   num_layers=dec_num_layers,
-                                   learn_influence=True,
-                                   node_types=T,
-                                   recurrent_dropout=0.0,
-                                   learn_additive_graph_influence=True)
+                                  hidden_size,
+                                  num_nodes=num_nodes,
+                                  num_layers=dec_num_layers,
+                                  learn_influence=True,
+                                  node_types=T,
+                                  dropout=0.0,
+                                  recurrent_dropout=0.0,
+                                  learn_additive_graph_influence=True)
 
         self.fc_q = StaticGraphLinear(hidden_size,
                                       output_size,
@@ -57,62 +56,93 @@ class Decoder(nn.Module):
                                       learn_influence=True,
                                       node_types=T)
 
-        self.fc_Z = StaticGraphLinear(hidden_size,
-                                      output_size,
-                                      num_nodes=num_nodes,
-                                      learn_influence=True,
-                                      node_types=T)
+        self.fc_cov_lat = StaticGraphLinear(hidden_size,
+                                            output_size,
+                                            num_nodes=num_nodes,
+                                            learn_influence=True,
+                                            node_types=T)
 
-        self.ln_q = nn.LayerNorm(output_size, elementwise_affine=False)
-        self.ln_Z = nn.LayerNorm(output_size, elementwise_affine=False)
+        self.ln_cov_lat = nn.LayerNorm(output_size, elementwise_affine=False)
 
-        self.to_q = StaticGraphLinear(output_size, 3, num_nodes=num_nodes, node_types=T)
-        self.to_Z = StaticGraphLinear(output_size, 6, num_nodes=num_nodes, node_types=T)
+        if position:
+            self.to_q = StaticGraphLinear(output_size, 3, num_nodes=num_nodes-1, node_types=T[:-1])
+            self.to_q_cov_lat = StaticGraphLinear(output_size, 6, num_nodes=num_nodes-1, node_types=T[:-1])
+
+            self.to_p = torch.nn.Linear(output_size, 3)
+            self.to_p_cov_lat = torch.nn.Linear(output_size, 6)
+        else:
+            self.to_q = StaticGraphLinear(output_size, 3, num_nodes=num_nodes, node_types=T)
+            self.to_q_cov_lat = StaticGraphLinear(output_size, 6, num_nodes=num_nodes, node_types=T)
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor, h: torch.Tensor, z: torch.Tensor, q_t: torch.Tensor, y: torch.Tensor, ph: int = 1) \
-            -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, h: torch.Tensor, z: torch.Tensor, q_t: torch.Tensor, p_t: torch.Tensor = None,
+                y: torch.Tensor = None, ph: int = 1, state=None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        dq = list()
+        dq_cov_lat = list()
 
-        q = list()
-        Z = list()
+        if self.position:
+            dp = list()
+            dp_cov_lat = list()
 
         x_t = x[:, -1]
-        x_t_1 = x[:, -2]
+        x_t_s = x_t.clone()
+        if state is None:
+            x_t_1 = x[:, -2]
+        else:
+            x_t_1 = state
+
         h_z = torch.cat([z, h], dim=-1)
 
         # Initialize hidden state of rnn
-        #rnn_h = self.initial_hidden_h(x_t_1)
-        rnn_c = self.initial_hidden_c(torch.cat([x_t_1, h_z], dim=-1))
-        hidden = [(rnn_c, None)] * self.num_layers
-
+        rnn_h = self.initial_hidden_c(torch.cat([x_t_1, h_z], dim=-1))
+        hidden = [(rnn_h, None)] * self.num_layers
 
         for i in range(ph):
-            # Run LSTM
+            # Run RNN
             rnn_out, hidden = self.rnn(torch.cat([x_t, h_z], dim=-1).unsqueeze(1), hidden, i)  # [B * Z, 1, N, D]
             y_t = rnn_out.squeeze(1)  # [B * Z, N, D]
             y_t = self.dropout(self.activation_fn(y_t))
 
-            y_t_q = self.fc_q(y_t)
-            y_t_Z = self.fc_Z(y_t)
+            y_t_state = self.fc_q(y_t)
+            y_t_cov_lat = self.fc_cov_lat(y_t)
 
-            y_t_q = self.activation_fn(y_t_q)
-            y_t_Z = torch.tanh(y_t_Z)
+            y_t_state = self.activation_fn(y_t_state)
+            y_t_cov_lat = torch.tanh(y_t_cov_lat)
 
-            y_t_Z = self.ln_Z(y_t_Z)
+            if self.position:
+                dq_t_3 = self.to_q(y_t_state[..., :-1, :])
+                cov_q_lat_t = self.to_q_cov_lat(y_t_cov_lat[..., :-1, :])
+                dq_t = Quaternion(angle=torch.norm(dq_t_3, dim=-1), axis=dq_t_3).q
+                q_t = Quaternion.mul_(dq_t, q_t)
 
-            dq_t_3 = self.to_q(y_t_q)
-            Z_t = self.to_Z(y_t_Z)
+                dp_t = self.to_p(y_t_state[..., -1, :]) / 20
+                cov_p_lat_t = self.to_p_cov_lat(y_t_cov_lat[..., -1, :])
 
-            dq_t = Quaternion(angle=torch.norm(dq_t_3, dim=-1), axis=dq_t_3).q#Quaternion(torch.cat([w, dq_t_3], dim=-1)).normalized.q #
+                p_t = p_t + dp_t
 
-            q_t = Quaternion.mul_(dq_t, q_t)  # Quaternion multiplication
+                dp.append(dp_t)
+                dp_cov_lat.append(cov_p_lat_t)
+                dp_padded = torch.nn.functional.pad(dp_t, (0, 5)).unsqueeze(1)
+                x_t = torch.cat([torch.cat([q_t, dq_t], dim=-1),  dp_padded], dim=1)
+            else:
+                dq_t_3 = self.to_q(y_t_state)
+                cov_q_lat_t = self.to_q_cov_lat(y_t_cov_lat)
+                x_t = torch.cat([q_t, dq_t], dim=-1)
+                dq_t = Quaternion(angle=torch.norm(dq_t_3, dim=-1), axis=dq_t_3).q
+                q_t = Quaternion.mul_(dq_t, q_t)
 
-            q.append(dq_t)
-            Z.append(Z_t)
-            x_t = torch.cat([q_t, dq_t], dim=-1)
+            dq.append(dq_t)
+            dq_cov_lat.append(cov_q_lat_t)
 
+        dq = torch.stack(dq, dim=1)
+        dq_cov_lat = torch.stack(dq_cov_lat, dim=1)
 
-        q = torch.stack(q, dim=1)
-        Z = torch.stack(Z, dim=1)
-        return q, Z
+        if self.position:
+            dp = torch.stack(dp, dim=1)
+            dp_cov_lat = torch.stack(dp_cov_lat, dim=1)
+        else:
+            dp = None
+            dp_cov_lat = None
+
+        return dq, dq_cov_lat, dp, dp_cov_lat, x_t_s
