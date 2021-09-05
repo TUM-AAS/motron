@@ -326,3 +326,19 @@ class Quaternion(object):
         mask = (torch.cumsum(mask, dim=0) % 2).type(torch.bool)
         result[1:][mask] *= -1
         return result
+
+    @staticmethod
+    def qfix_pos_(q: torch.Tensor) -> torch.Tensor:
+        """
+        Enforce quaternion w to be positive
+
+        Expects a tensor of shape (L, J, 4), where L is the sequence length and J is the number of joints.
+        Returns a tensor of the same shape.
+        """
+        assert len(q.shape) == 3
+        assert q.shape[-1] == 4
+
+        mask = q[..., 0] < 0.
+        q_out = q.clone()
+        q_out[mask] *= -1.
+        return q_out

@@ -77,7 +77,7 @@ class Motion(torch.nn.Module):
 
             dp = None
             if self._position:
-                dp = 20 * (p[:, 1:] - p[:, :-1])
+                dp = 20 * (p[:, 1:] - p[:, :-1])  # TODO: This should not be fixed to 20
                 dp = torch.cat([torch.zeros_like(dp[:, [0]]), dp], dim=1)
 
             core_state = None

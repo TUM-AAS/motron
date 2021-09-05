@@ -29,7 +29,7 @@ class Decoder(nn.Module):
         self.activation_fn = torch.tanh
         self.num_layers = dec_num_layers
 
-        self.initial_hidden_c = StaticGraphLinear(latent_size + input_size + feature_size,
+        self.initial_hidden_h = StaticGraphLinear(latent_size + input_size + feature_size,
                                                   hidden_size,
                                                   num_nodes=num_nodes,
                                                   learn_influence=True,
@@ -95,7 +95,7 @@ class Decoder(nn.Module):
         h_z = torch.cat([z, h], dim=-1)
 
         # Initialize hidden state of rnn
-        rnn_h = self.initial_hidden_c(torch.cat([x_t_1, h_z], dim=-1))
+        rnn_h = self.initial_hidden_h(torch.cat([x_t_1, h_z], dim=-1))
         hidden = [(rnn_h, None)] * self.num_layers
 
         for i in range(ph):
@@ -128,9 +128,9 @@ class Decoder(nn.Module):
             else:
                 dq_t_3 = self.to_q(y_t_state)
                 cov_q_lat_t = self.to_q_cov_lat(y_t_cov_lat)
-                x_t = torch.cat([q_t, dq_t], dim=-1)
                 dq_t = Quaternion(angle=torch.norm(dq_t_3, dim=-1), axis=dq_t_3).q
                 q_t = Quaternion.mul_(dq_t, q_t)
+                x_t = torch.cat([q_t, dq_t], dim=-1)
 
             dq.append(dq_t)
             dq_cov_lat.append(cov_q_lat_t)

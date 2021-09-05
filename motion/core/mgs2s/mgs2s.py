@@ -43,7 +43,7 @@ class MGS2S(nn.Module):
                                           latent_size,
                                           bias=False,
                                           learn_influence=True,
-                                          graph_influence = G,
+                                          graph_influence=G,
                                           num_nodes=num_nodes,
                                           node_types=T)
 
@@ -120,7 +120,7 @@ class MGS2S(nn.Module):
 
     def nll(self, y_pred: MixtureSameFamily, y: torch.Tensor) -> torch.Tensor:
         if self.training:
-            ll = (y_pred.log_prob(y).clamp(min=-500, max=20).sum(dim=1)  # T
+            ll = ((y_pred.log_prob(y)).sum(dim=1)  # T
                   .mean(-1)  # N
                   .mean())
         else:

@@ -4,6 +4,7 @@ from torch.distributions.utils import lazy_property
 tril_indices = torch.tril_indices(row=3, col=3, offset=-1)
 triu_indices = torch.triu_indices(row=3, col=3, offset=1)
 
+
 class MultivariateNormal(torch.distributions.MultivariateNormal):
     def __init__(self, loc, std, correlation, scale_tril=None, fix_rho23=True):
 
@@ -30,6 +31,13 @@ class MultivariateNormal(torch.distributions.MultivariateNormal):
             l21 = rho23_minus_rho12_rho_13 / torch.sqrt(one_minus_rho12_2)
             l22 = torch.sqrt(1 - ((rho13_square + rho23 ** 2 - 2 * self.correlation.prod(dim=-1))
                                               / one_minus_rho12_2))
+
+            assert not torch.isnan(l00).any()
+            assert not torch.isnan(l10).any()
+            assert not torch.isnan(l11).any()
+            assert not torch.isnan(l20).any()
+            assert not torch.isnan(l21).any()
+            assert not torch.isnan(l22).any()
 
             scale_tril_correlation = torch.stack([torch.stack([l00, zero, zero], dim=-1),
                                                   torch.stack([l10, l11, zero], dim=-1),
