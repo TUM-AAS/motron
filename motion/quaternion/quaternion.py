@@ -328,17 +328,35 @@ class Quaternion(object):
         return result
 
     @staticmethod
-    def qfix_pos_(q: torch.Tensor) -> torch.Tensor:
+    def qfix_positive_(q: torch.Tensor) -> torch.Tensor:
         """
         Enforce quaternion w to be positive
 
         Expects a tensor of shape (L, J, 4), where L is the sequence length and J is the number of joints.
         Returns a tensor of the same shape.
         """
-        assert len(q.shape) == 3
         assert q.shape[-1] == 4
 
         mask = q[..., 0] < 0.
         q_out = q.clone()
         q_out[mask] *= -1.
         return q_out
+
+    @staticmethod
+    def weighted_mean_(q: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+        """
+        Computes weighted mean of multiple quaternions.
+
+        Expects a tensor of shape (*, N, 4), where N is the number of quaternions and a weight tensor of the same
+        or broadcastable shape. Weight have to sum up to 1.
+
+        Returns a tensor of the same shape.
+        """
+
+        Q = (q * w)
+        QQT = Q.transpose(-1, -2) @ Q
+        # There is a bug calculating the eigenvectors on GPU in torch 1.8
+        # TODO change on 1.9 (torch.linalg.eig)
+        mean_q_unnorm = torch.symeig(QQT.to('cpu'), eigenvectors=True)[1][..., -1].to(q.device)
+        mean_q = torch.nn.functional.normalize(mean_q_unnorm, dim=-1)
+        return mean_q

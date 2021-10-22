@@ -35,20 +35,15 @@ class Decoder(nn.Module):
                                                   learn_influence=True,
                                                   node_types=T)
 
-        # self.initial_hidden_h = StaticGraphLinear(feature_size,
-        #                                           hidden_size,
-        #                                           num_nodes=num_nodes,
-        #                                           node_types=T)
-
         self.rnn = StaticGraphGRU(feature_size + latent_size + input_size,
                                   hidden_size,
                                   num_nodes=num_nodes,
                                   num_layers=dec_num_layers,
                                   learn_influence=True,
                                   node_types=T,
-                                  dropout=0.0,
-                                  recurrent_dropout=0.0,
-                                  learn_additive_graph_influence=True)
+                                  recurrent_dropout=dropout,
+                                  learn_additive_graph_influence=True,
+                                  clockwork=False)
 
         self.fc_q = StaticGraphLinear(hidden_size,
                                       output_size,
@@ -61,8 +56,6 @@ class Decoder(nn.Module):
                                             num_nodes=num_nodes,
                                             learn_influence=True,
                                             node_types=T)
-
-        self.ln_cov_lat = nn.LayerNorm(output_size, elementwise_affine=False)
 
         if position:
             self.to_q = StaticGraphLinear(output_size, 3, num_nodes=num_nodes-1, node_types=T[:-1])
@@ -77,7 +70,7 @@ class Decoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, h: torch.Tensor, z: torch.Tensor, q_t: torch.Tensor, p_t: torch.Tensor = None,
-                y: torch.Tensor = None, ph: int = 1, state=None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+                ph: int = 1, state=None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         dq = list()
         dq_cov_lat = list()
 

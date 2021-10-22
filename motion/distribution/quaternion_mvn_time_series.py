@@ -3,10 +3,11 @@ from typing import List
 import torch
 from torch.distributions.utils import lazy_property
 
-from motion.distribution import MultivariateNormal, QuaternionMultivariateNormal
+from motion.distribution import QuaternionMultivariateNormal
 from motion.quaternion import Quaternion
 
 tril_indices = torch.tril_indices(row=3, col=3, offset=-1)
+
 
 class QuaternionMultivariateNormalTimeSeries(torch.distributions.Distribution):
     def __init__(self, p_q0: QuaternionMultivariateNormal, p_dq: QuaternionMultivariateNormal):

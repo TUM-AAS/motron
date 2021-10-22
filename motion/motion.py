@@ -24,9 +24,7 @@ class Motion(torch.nn.Module):
 
         super(Motion, self).__init__()
 
-        self.param_groups = [{
-            'teacher_forcing_factor': 0.,
-        }]
+        self.param_groups = [{}]
 
         self._latent_size = latent_size
         self._position = position
@@ -55,8 +53,7 @@ class Motion(torch.nn.Module):
         else:
             self.node_dropout = None
 
-    def forward(self, q: torch.Tensor, p: Optional[torch.tensor] = None,  ph: int = 1,
-                state=None, y: torch.Tensor = None) \
+    def forward(self, q: torch.Tensor, p: Optional[torch.tensor] = None,  ph: int = 1, state=None) \
             -> Tuple[torch.distributions.Distribution, torch.distributions.Distribution, Tuple, dict]:
         if not self.training:
             y = None
@@ -96,7 +93,7 @@ class Motion(torch.nn.Module):
         if self.ignore_absolute_root_rotation:
             q[:, :, 0] = torch.zeros_like(q[:, :, 0])
 
-        dq, dq_cov_lat, dp, dp_cov_lat, z_logits, core_state, kwargs = self.core(q, dq, p, dp, y, ph, core_state)
+        dq, dq_cov_lat, dp, dp_cov_lat, z_logits, core_state, kwargs = self.core(q, dq, p, dp, ph, core_state)
 
         # Permute from [B, Z, T, N, D] to [B, T, N, Z, D]
         dq = dq.permute(0, 2, 3, 1, 4).contiguous()
@@ -129,9 +126,9 @@ class Motion(torch.nn.Module):
             p_p0 = MultivariateNormal(loc=p0, std=1e-2 * torch.ones_like(log_std_p[:, 0]),
                                       correlation=torch.zeros_like(correlation_p[:, 0]))
 
-            p_p = TimeSeriesMixtureModel(mixture_distribution=torch.distributions.Categorical(logits=z_logits.unsqueeze(1)),
-                                         component_distribution=PositionMultivariateNormalTimeSeries(p_p0=p_p0,
-                                                                                                     p_dp=p_dp))
+            p_p = TimeSeriesMixtureModel(mixture_distribution=torch.distributions.Categorical(
+                logits=z_logits.unsqueeze(1)),
+                component_distribution=PositionMultivariateNormalTimeSeries(p_p0=p_p0, p_dp=p_dp))
         else:
             p_p = None
 
@@ -140,6 +137,3 @@ class Motion(torch.nn.Module):
 
     def loss(self, y_pred, y, **kwargs):
         return self.core.loss(y_pred, y, **kwargs)
-
-    def hparams(self) -> dict:
-        return {}

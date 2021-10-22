@@ -7,7 +7,6 @@ from torch.distributions import MixtureSameFamily
 from motion.components.structural import StaticGraphLinear
 from motion.core.mgs2s.decoder import Decoder
 from motion.core.mgs2s.encoder import Encoder
-from motion.utils.torch import mutual_inf_px
 
 
 class MGS2S(nn.Module):
@@ -59,10 +58,9 @@ class MGS2S(nn.Module):
                                param_groups=self.param_groups,
                                **kwargs)
 
-        self.z_dropout = nn.Dropout(0.)
+        self.z_dropout = nn.Dropout(kwargs['dropout'])
 
-    def forward(self, q: torch.Tensor, q_dot: torch.Tensor, p: torch.Tensor, p_dot: torch.Tensor,
-                y: torch.Tensor = None, ph=1, state=None):
+    def forward(self, q: torch.Tensor, q_dot: torch.Tensor, p: torch.Tensor, p_dot: torch.Tensor, ph=1, state=None):
         bs = q.shape[0]
 
         if state is None:
@@ -95,17 +93,12 @@ class MGS2S(nn.Module):
         else:
             p_t_tiled = None
 
-        # Repeat y for each |z|
-        if y is not None:
-            y = y.repeat_interleave(repeats=self._latent_size, dim=0)  # [B * Z, T, N, D]
-
         # Decode future q
         dq, dq_cov_lat, dp, dp_cov_lat, decoder_state = self.decoder(x=x_tiled,
                                                                      h=h,
                                                                      z=z,
                                                                      q_t=q_t_tiled,
                                                                      p_t=p_t_tiled,
-                                                                     y=y,
                                                                      ph=ph,
                                                                      state=state[1])  # [B * Z, T, N, D]
 
@@ -118,25 +111,8 @@ class MGS2S(nn.Module):
 
         return dq, dq_cov_lat, dp, dp_cov_lat, z_logits, (encoder_state, decoder_state), {}
 
-    def nll(self, y_pred: MixtureSameFamily, y: torch.Tensor) -> torch.Tensor:
-        if self.training:
-            ll = ((y_pred.log_prob(y)).sum(dim=1)  # T
-                  .mean(-1)  # N
-                  .mean())
-        else:
-            ll = (y_pred.log_prob(y).sum(dim=1)  # T
-                  .mean(-1)  # N
-                  .mean())
-        return -ll
-
     def loss(self, y_pred: MixtureSameFamily, y: torch.Tensor) -> torch.Tensor:
-        nll = self.nll(y_pred, y)
-        if self.training:
-            mi = 3.5 * mutual_inf_px(y_pred.mixture_distribution)
-        else:
-            mi = 0
-        # if self.training:
-        #     var = y_pred.component_distribution.mean.var(dim=-2).mean()
-        # else:
-        #     var = 0.
-        return nll #- mi #- var #
+        ll = ((y_pred.log_prob(y)).sum(dim=1)  # T
+              .mean(-1)  # N
+              .mean())
+        return -ll
