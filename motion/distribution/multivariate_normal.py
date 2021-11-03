@@ -1,3 +1,4 @@
+import scipy
 import torch
 from torch.distributions.utils import lazy_property
 
@@ -68,6 +69,22 @@ class MultivariateNormal(torch.distributions.MultivariateNormal):
                   (std[..., 1] * std[..., 2]))
         correlation = torch.cat([corr01, corr02, corr12], dim=-1)
         return self.__class__(loc=self.loc + other.loc, std=std, correlation=correlation)
+
+    # def cdf(self, value, num_samples=1000):
+    #     halton_samples = torch.Tensor(scipy.stats.qmc.Halton(self.event_shape[0]).random(n=num_samples))
+    #     halton_samples = halton_samples.view((num_samples, ) + (1, ) * len(self.batch_shape) + self.event_shape)
+    #
+    #     max_var = torch.diag(self.covariance_matrix) ** 0.5
+    #
+    #     int_limit_scale = 6. * max_var + (value - self.mean).maximum(dim=0)
+    #
+    #     scaled_moved_halton_samples = int_limit_scale * (halton_samples - 1) + value
+    #
+    #     log_prob = self.log_prob(scaled_moved_halton_samples)
+    #
+    #     log_cdf = torch.logsumexp(log_prob, dim=0) + torch.log(int_limit_scale).sum(dim=-1) - torch.log(num_samples)
+    #
+    #     return torch.minimum(log_cdf, 1.0)
 
 
 # C = torch.rand((1, 3, 3))
