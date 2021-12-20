@@ -78,6 +78,7 @@ class MGS2S(nn.Module):
 
         # Sample all z
         z_mask = torch.eye(self._latent_size, device=q.device)
+        #z_mask = (z_mask.repeat(bs, 1) * z_logits.repeat(self._latent_size, 1)).unsqueeze(-2).repeat_interleave(repeats=h.shape[-2], dim=-2)
         z_mask = z_mask.repeat(bs, 1).unsqueeze(-2).repeat_interleave(repeats=h.shape[-2], dim=-2)  # [B * Z, N, Z]
         z = z_mask
 

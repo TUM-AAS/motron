@@ -22,13 +22,28 @@ class Encoder(nn.Module):
         self.activation_fn = torch.nn.LeakyReLU()
         self.num_layers = enc_num_layers
 
-        self.rnn = StaticGraphGRU(input_size, hidden_size, num_layers=enc_num_layers, node_types=T, num_nodes=num_nodes,
-                                  bias=True, clockwork=False)
+        self.rnn = StaticGraphGRU(input_size,
+                                  hidden_size,
+                                  num_layers=enc_num_layers,
+                                  node_types=T,
+                                  num_nodes=num_nodes,
+                                  bias=True,
+                                  clockwork=False,
+                                  learn_influence=True)
 
-        self.fc = StaticGraphLinear(hidden_size, output_size, num_nodes=num_nodes, node_types=T, bias=True)
+        self.fc = StaticGraphLinear(hidden_size,
+                                    output_size,
+                                    num_nodes=num_nodes,
+                                    node_types=T,
+                                    bias=True,
+                                    learn_influence=True)
 
-        self.initial_hidden1 = StaticGraphLinear(input_size, hidden_size, num_nodes=num_nodes, node_types=T, bias=True)
-        #self.initial_hidden2 = StaticGraphLinear(input_size, hidden_size, num_nodes=num_nodes, node_types=T, bias=True)
+        self.initial_hidden1 = StaticGraphLinear(input_size,
+                                                 hidden_size,
+                                                 num_nodes=num_nodes,
+                                                 node_types=T,
+                                                 bias=True,
+                                                 learn_influence=True)
 
         self.dropout = nn.Dropout(dropout)
 

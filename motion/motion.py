@@ -58,7 +58,7 @@ class Motion(torch.nn.Module):
         if not self.training:
             y = None
 
-        if self.node_dropout is not None:
+        if self.node_dropout is not None and self.training:
             q = self.node_dropout(q)
 
         q0_state = q[:, [-1]].clone()

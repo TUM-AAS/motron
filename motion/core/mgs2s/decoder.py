@@ -20,6 +20,7 @@ class Decoder(nn.Module):
                  T: torch.Tensor = None,
                  dec_num_layers: int = 1,
                  dropout: float = 0.,
+                 adjust_measurement_error: bool = False,
                  param_groups=None,
                  **kwargs):
         super().__init__()
@@ -28,6 +29,7 @@ class Decoder(nn.Module):
         self.param_groups = param_groups
         self.activation_fn = torch.tanh
         self.num_layers = dec_num_layers
+        self.adjust_measurement_error = adjust_measurement_error
 
         self.initial_hidden_h = StaticGraphLinear(latent_size + input_size + feature_size,
                                                   hidden_size,
@@ -63,9 +65,18 @@ class Decoder(nn.Module):
 
             self.to_p = torch.nn.Linear(output_size, 3)
             self.to_p_cov_lat = torch.nn.Linear(output_size, 6)
+
+            # TODO: Adjust measurement error for position
         else:
             self.to_q = StaticGraphLinear(output_size, 3, num_nodes=num_nodes, node_types=T)
             self.to_q_cov_lat = StaticGraphLinear(output_size, 6, num_nodes=num_nodes, node_types=T)
+
+            if self.adjust_measurement_error:
+                self.q0_adjust = StaticGraphLinear(latent_size + input_size,
+                                                   3,
+                                                   num_nodes=num_nodes,
+                                                   node_types=T,
+                                                   learn_influence=True)
 
         self.dropout = nn.Dropout(dropout)
 
@@ -86,6 +97,11 @@ class Decoder(nn.Module):
             x_t_1 = state
 
         h_z = torch.cat([z, h], dim=-1)
+
+        dq_t0_adjust = None
+        if self.adjust_measurement_error:
+            t0_adjust = self.q0_adjust(h_z)
+            dq_t0_adjust = Quaternion(angle=torch.norm(t0_adjust, dim=-1), axis=t0_adjust).q
 
         # Initialize hidden state of rnn
         rnn_h = self.initial_hidden_h(torch.cat([x_t_1, h_z], dim=-1))
@@ -122,6 +138,8 @@ class Decoder(nn.Module):
                 dq_t_3 = self.to_q(y_t_state)
                 cov_q_lat_t = self.to_q_cov_lat(y_t_cov_lat)
                 dq_t = Quaternion(angle=torch.norm(dq_t_3, dim=-1), axis=dq_t_3).q
+                if i == 0 and self.adjust_measurement_error:
+                    dq_t = Quaternion.mul_(dq_t0_adjust, dq_t)
                 q_t = Quaternion.mul_(dq_t, q_t)
                 x_t = torch.cat([q_t, dq_t], dim=-1)
 
